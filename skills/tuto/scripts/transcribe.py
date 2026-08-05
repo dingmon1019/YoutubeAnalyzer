@@ -1,5 +1,12 @@
-"""자막 사슬: VTT 파싱·롤링 중복 제거 (+Groq/로컬 whisper는 T6). §5 P5/P6."""
+"""자막 사슬: VTT 파싱·롤링 중복 제거 + Groq/로컬 Whisper 사슬·환각 방어. §5 P5/P6."""
+import argparse
+import json
+import mimetypes
 import re
+import sys
+import urllib.request
+import uuid
+from pathlib import Path
 
 import common
 
@@ -7,6 +14,12 @@ _TS_LINE = re.compile(
     r"(\d{2}:\d{2}:\d{2})\.(\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2})\.(\d{3})"
 )
 _INLINE = re.compile(r"<[^>]+>")
+_SIL = re.compile(r"silence_(start|end): ([\d.]+)")
+
+GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+GROQ_LIMIT = 24 * 1024 * 1024  # 25MB 제한에 여유
+NO_SPEECH_MAX = 0.6
+CHUNK_SEC = 1200
 
 
 def parse_vtt(text: str) -> list:
@@ -47,3 +60,179 @@ def dedup_cues(cues: list) -> tuple:
         if text:
             out.append({"start": c["start"], "end": c["end"], "text": text})
     return out, removed
+
+
+def collapse_repeats(segs: list, n: int = 3) -> tuple:
+    """동일 텍스트 n회+ 연속 세그먼트 → 1개로 붕괴 (P5 반복 루프 환각)."""
+    out, removed, i = [], 0, 0
+    while i < len(segs):
+        j = i
+        while j < len(segs) and segs[j]["text"].strip() == segs[i]["text"].strip():
+            j += 1
+        run_len = j - i
+        if run_len >= n:
+            merged = dict(segs[i])
+            merged["end"] = segs[j - 1]["end"]
+            out.append(merged)
+            removed += run_len - 1
+        else:
+            out.extend(segs[i:j])
+        i = j
+    return out, removed
+
+
+def detect_silences(audio_path) -> list:
+    import subprocess
+    p = subprocess.run(
+        ["ffmpeg", "-i", str(audio_path), "-af", "silencedetect=noise=-35dB:d=2",
+         "-f", "null", "-"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600,
+    )
+    events, start = [], None
+    for kind, val in _SIL.findall(p.stderr):
+        if kind == "start":
+            start = float(val)
+        elif start is not None:
+            events.append((start, float(val)))
+            start = None
+    return events
+
+
+def drop_silence_overlap(segs: list, silences: list) -> tuple:
+    """세그먼트 중심이 무음 구간 안이면 드롭 (P5 무음 환각)."""
+    def in_silence(s):
+        mid = (s["start"] + s["end"]) / 2
+        return any(a <= mid <= b for a, b in silences)
+    kept = [s for s in segs if not in_silence(s)]
+    return kept, len(segs) - len(kept)
+
+
+def _groq_request(audio_path, api_key: str) -> dict:
+    boundary = uuid.uuid4().hex
+    data = audio_path.read_bytes()
+    parts = []
+    for name, val in (("model", "whisper-large-v3"), ("response_format", "verbose_json")):
+        parts.append(
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{val}\r\n".encode()
+        )
+    ctype = mimetypes.guess_type(str(audio_path))[0] or "audio/mpeg"
+    parts.append(
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
+        f"filename=\"{audio_path.name}\"\r\nContent-Type: {ctype}\r\n\r\n".encode()
+        + data + b"\r\n"
+    )
+    parts.append(f"--{boundary}--\r\n".encode())
+    body = b"".join(parts)
+    req = urllib.request.Request(
+        GROQ_URL, data=body,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=300) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def _split_audio(audio_path, chunk_sec: int = CHUNK_SEC) -> list:
+    """25MB 초과 시 시간 분할. 64kbps mono mp3 기준 20분 ≈ 9.6MB."""
+    out_tpl = audio_path.parent / "chunk_%03d.mp3"
+    common.run(["ffmpeg", "-y", "-i", audio_path, "-f", "segment",
+                "-segment_time", chunk_sec, "-c", "copy", out_tpl])
+    return sorted(audio_path.parent.glob("chunk_*.mp3"))
+
+
+def groq_transcribe(audio_path, api_key: str) -> list:
+    chunks = [audio_path] if audio_path.stat().st_size <= GROQ_LIMIT else _split_audio(audio_path)
+    segs, offset = [], 0.0
+    for i, chunk in enumerate(chunks):
+        resp = _groq_request(chunk, api_key)
+        for s in resp.get("segments", []):
+            if s.get("no_speech_prob", 0.0) > NO_SPEECH_MAX:
+                continue
+            segs.append({
+                "start": float(s["start"]) + offset,
+                "end": float(s["end"]) + offset,
+                "text": s["text"].strip(),
+            })
+        offset = (i + 1) * float(CHUNK_SEC)
+    return segs
+
+
+def local_transcribe(audio_path):
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        return None
+    model = WhisperModel("large-v3", device="auto", compute_type="int8")
+    raw, _info = model.transcribe(str(audio_path), vad_filter=True)
+    return [{"start": s.start, "end": s.end, "text": s.text.strip()} for s in raw]
+
+
+def _extract_audio(cache_dir: Path) -> Path:
+    audio = cache_dir / "audio.mp3"
+    if not audio.exists():
+        common.run(["ffmpeg", "-y", "-i", cache_dir / "video.mp4",
+                    "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k", audio])
+    return audio
+
+
+def get_transcript(cache_dir: Path, mode: str = "auto") -> dict:
+    result = {"source": "none", "lang": "", "segments": [], "flags": [], "dupes_removed": 0}
+    vtts = sorted(cache_dir.glob("subs*.vtt"))
+    if vtts and mode != "no-captions-test":
+        lang = "ko" if ".ko" in vtts[0].name else ("en" if ".en" in vtts[0].name else "?")
+        cues = parse_vtt(vtts[0].read_text(encoding="utf-8", errors="replace"))
+        segs, removed = dedup_cues(cues)
+        result.update(source="captions", lang=lang, segments=segs, dupes_removed=removed)
+    elif mode != "no-whisper":
+        video = cache_dir / "video.mp4"
+        if video.exists():
+            audio = _extract_audio(cache_dir)
+            cfg = common.load_config()
+            segs = None
+            if mode in ("auto", "groq") and cfg.get("GROQ_API_KEY"):
+                try:
+                    segs = groq_transcribe(audio, cfg["GROQ_API_KEY"])
+                    result["source"] = "groq"
+                except Exception as e:
+                    result["flags"].append(f"groq_failed: {str(e)[:200]}")
+            if segs is None and mode in ("auto", "local"):
+                segs = local_transcribe(audio)
+                if segs is not None:
+                    result["source"] = "local"
+            if segs:
+                silences = detect_silences(audio)
+                segs, sil_n = drop_silence_overlap(segs, silences)
+                segs, rep_n = collapse_repeats(segs)
+                if sil_n:
+                    result["flags"].append(f"silence_dropped: {sil_n}")
+                if rep_n:
+                    result["flags"].append(f"repeats_collapsed: {rep_n}")
+                result["segments"] = segs
+    if not result["segments"]:
+        result["source"] = "none"
+        result["flags"].append("no transcript available — frames-only mode")
+    (cache_dir / "transcript.json").write_text(
+        json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8"
+    )
+    return result
+
+
+def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")  # Windows cp949 콘솔에서 em-dash 등 크래시 방지
+    ap = argparse.ArgumentParser()
+    ap.add_argument("cache_dir")
+    ap.add_argument("--whisper", choices=["groq", "local"], default=None)
+    ap.add_argument("--no-whisper", action="store_true")
+    args = ap.parse_args()
+    mode = "no-whisper" if args.no_whisper else (args.whisper or "auto")
+    r = get_transcript(Path(args.cache_dir), mode)
+    print(f"transcript: source={r['source']} lang={r['lang']} segments={len(r['segments'])} "
+          f"dupes_removed={r['dupes_removed']} flags={r['flags'] or 'none'}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
