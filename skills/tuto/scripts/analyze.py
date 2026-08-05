@@ -17,10 +17,11 @@ def _in_ranges(t: float, ranges: list) -> bool:
     return any(r["start"] <= t <= r["end"] for r in ranges)
 
 
-def allocate_map_budget(duration: float, sig: dict) -> list:
+def allocate_map_budget(duration: float, sig: dict, extra: int = 0) -> list:
     if duration <= 0:
         return []
     n = min(40, max(12, round(duration / 60 * 1.2)))
+    target = n + max(0, extra)
     min_gap = max(8.0, duration / n / 2)
     sb = sig.get("sponsorblock", [])
     cands = []                                     # (weight, t)
@@ -31,8 +32,12 @@ def allocate_map_budget(duration: float, sig: dict) -> list:
         cands.append((W_HEAT, (h["start"] + h["end"]) / 2))
     for p in sig.get("activity", {}).get("peaks", []):
         cands.append((W_ACT, float(p)))
-    for i in range(n):
-        cands.append((W_GRID, duration * (i + 0.5) / n))
+    # 그리드는 target(기본 호출이면 n과 동일) 기준으로 촘촘히 — extra로 보강 요청 시 챕터/히트맵/
+    # 활동피크가 시간상 몰려 있어도(실측 PlMpk-If9jA: 활동피크 7개가 0~4:27 구간에 편중) 그리드가
+    # 유일한 여분 후보 공급원이 되므로, n 고정 그리드로는 채워줄 후보가 애초에 없어 extra가
+    # 무의미해진다. min_gap은 base n으로 고정(간격 하한 의미 유지), 그리드 밀도만 target을 따른다.
+    for i in range(target):
+        cands.append((W_GRID, duration * (i + 0.5) / target))
     cands = [
         (w, max(0.0, min(duration, t))) for w, t in cands
         if 0 <= t <= duration and not _in_ranges(t, sb)
@@ -49,11 +54,36 @@ def allocate_map_budget(duration: float, sig: dict) -> list:
             picked.append(end_anchor)
 
     for w, t in sorted(cands, key=lambda x: -x[0]):
-        if len(picked) >= n:
+        if len(picked) >= target:
             break
         if all(abs(t - p) >= min_gap for p in picked):
             picked.append(t)
-    return sorted(picked)[:n]
+    return sorted(picked)[:target]
+
+
+def extract_map_frames(video_path: Path, duration: float, sig: dict, out_dir: Path) -> tuple:
+    """지도 프레임 추출: allocate_map_budget()의 floor는 "최소 커버리지" 보장이지 희망사항이
+    아니다. dedup이 근접중복(예: 정지 화면 인접 프레임)을 솎아내며 그 floor를 갉아먹으면,
+    다음 순위 후보를 추가로 요청해(extra) 목표치를 재충전한다. allocate_map_budget(extra=k)의
+    선택 순서는 extra=0일 때와 동일한 그리디 결정열의 연장이므로(같은 cands, 같은 정렬,
+    target만 다름) 항상 이전 결과의 상위집합을 반환 — 이미 추출된 프레임은 frames.extract_frames
+    의 존재 확인으로 재추출되지 않는다. 후보 풀이 소진되면(더 못 늘면) 있는 그대로 반환한다 —
+    변화가 적은 짧은 영상의 정상적 한계다."""
+    ts = allocate_map_budget(duration, sig)
+    target = len(ts)
+    kept, dropped = [], 0
+    extra = 0
+    for _ in range(4):
+        raw = frames.extract_frames(video_path, sorted(ts), 512, out_dir)
+        kept, dropped = frames.dedup_frames(raw)
+        if len(kept) >= target:
+            break
+        extra += max(1, target - len(kept))
+        grown = allocate_map_budget(duration, sig, extra=extra)
+        if len(grown) <= len(ts):
+            break                                    # 후보 풀 소진 — 더 보강 불가
+        ts = grown
+    return kept, dropped
 
 
 def download(url: str, cd: Path) -> dict:
@@ -136,9 +166,7 @@ def run_pass1(url: str) -> int:
     (cd / "signals.json").write_text(json.dumps(sig, ensure_ascii=False, indent=1), encoding="utf-8")
     tr = transcribe.get_transcript(cd, mode="auto")
 
-    ts = allocate_map_budget(duration, sig)
-    raw = frames.extract_frames(cd / "video.mp4", ts, 512, cd / "frames")
-    kept, dropped = frames.dedup_frames(raw)
+    kept, dropped = extract_map_frames(cd / "video.mp4", duration, sig, cd / "frames")
 
     hm_top = sorted(sig["heatmap"], key=lambda h: -h["value"])[:10]
     print(f"=== YTA PASS1: {vid} ===")
