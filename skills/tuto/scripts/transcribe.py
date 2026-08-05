@@ -1,7 +1,5 @@
 """자막 사슬: VTT 파싱·롤링 중복 제거 (+Groq/로컬 whisper는 T6). §5 P5/P6."""
 import re
-import sys
-from pathlib import Path
 
 import common
 
@@ -21,6 +19,10 @@ def parse_vtt(text: str) -> list:
             start = common.parse_ts(m.group(1)) + int(m.group(2)) / 1000
             end = common.parse_ts(m.group(3)) + int(m.group(4)) / 1000
             cur = {"start": start, "end": end, "text": ""}
+        elif not line.strip():  # blank line resets cur
+            if cur and cur["text"]:
+                cues.append(cur)
+            cur = None
         elif cur is not None:
             clean = _INLINE.sub("", line).strip()
             if clean and not clean.startswith(("WEBVTT", "Kind:", "Language:")):
