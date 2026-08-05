@@ -18,6 +18,8 @@ def _in_ranges(t: float, ranges: list) -> bool:
 
 
 def allocate_map_budget(duration: float, sig: dict) -> list:
+    if duration <= 0:
+        return []
     n = min(40, max(12, round(duration / 60 * 1.2)))
     min_gap = max(8.0, duration / n / 2)
     sb = sig.get("sponsorblock", [])
@@ -31,9 +33,21 @@ def allocate_map_budget(duration: float, sig: dict) -> list:
         cands.append((W_ACT, float(p)))
     for i in range(n):
         cands.append((W_GRID, duration * (i + 0.5) / n))
-    cands = [(w, t) for w, t in cands if 0 <= t <= duration and not _in_ranges(t, sb)]
+    cands = [
+        (w, max(0.0, min(duration, t))) for w, t in cands
+        if 0 <= t <= duration and not _in_ranges(t, sb)
+    ]
 
-    picked = [1.0, max(2.0, duration - 2.0)]       # 시작·끝 고정
+    # 고정 앵커(시작·끝)도 다른 후보와 동일하게 min_gap·[0,duration] 불변식을 지켜야 한다.
+    # 매우 짧은/0에 가까운 영상에서는 t=1.0·t=duration-2가 서로 붙거나(간격 위반) 아예
+    # 영상 길이를 벗어날 수 있어(경계 위반), 무조건 포함이 아니라 조건부로 포함한다.
+    start_anchor = max(0.0, min(duration, 1.0 if duration > 2 else duration / 2))
+    picked = [start_anchor]
+    if duration > 4:
+        end_anchor = max(0.0, min(duration, duration - 2.0))
+        if end_anchor - start_anchor >= min_gap:
+            picked.append(end_anchor)
+
     for w, t in sorted(cands, key=lambda x: -x[0]):
         if len(picked) >= n:
             break

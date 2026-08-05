@@ -36,6 +36,25 @@ def test_allocate_min_gap():
     assert all(b - a >= min_gap * 0.99 for a, b in zip(ts, ts[1:]))
 
 
+def test_allocate_zero_duration_returns_empty():
+    assert analyze.allocate_map_budget(0.0, SIG) == []
+
+
+def test_allocate_short_video_respects_invariants():
+    ts = sorted(analyze.allocate_map_budget(10.0, SIG))
+    assert all(0 <= t <= 10.0 for t in ts)
+    n = min(40, max(12, round(10.0 / 60 * 1.2)))
+    min_gap = max(8.0, 10.0 / n / 2)
+    assert all(b - a >= min_gap * 0.99 for a, b in zip(ts, ts[1:]))
+    assert len(ts) >= 1  # at least the start anchor survives
+
+
+def test_allocate_normal_duration_unchanged():
+    ts = analyze.allocate_map_budget(1800.0, SIG)
+    assert len(ts) == 36
+    assert any(abs(t - 1.0) < 0.5 for t in ts) and any(abs(t - 1798.0) < 1 for t in ts)
+
+
 def test_lru_evict_removes_oldest_video_only(tmp_path, monkeypatch):
     monkeypatch.setattr(analyze.common, "CACHE_ROOT", tmp_path)
     monkeypatch.setattr(analyze.common, "load_config", lambda: {"CACHE_MAX_VIDEOS": "2"})
