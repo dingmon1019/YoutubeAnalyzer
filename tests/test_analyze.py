@@ -133,6 +133,36 @@ def test_extract_map_frames_backfills_when_dedup_drops_below_floor(monkeypatch, 
     assert len(kept) >= target
 
 
+def test_extract_map_frames_keeps_best_round_when_later_round_is_worse(monkeypatch, tmp_path):
+    """리뷰 발견(Finding 1): 백필 라운드가 항상 더 나은 결과라는 보장은 없다 — 그리드가
+    target마다 재생성되므로 상위집합이 아니다(실측: EMPTY_SIG에서 extra=1 시 superset=False
+    확인됨). 그리드가 더 촘촘해질수록 인접 후보끼리 시각적으로 더 비슷해지기 쉬워, 나중
+    라운드가 오히려 dedup에서 더 많이 깎일 수 있다. best-so-far를 추적하지 않으면
+    라운드1(11장)보다 못한 라운드2(9장)가 최종값으로 나가버린다."""
+    duration = 352.0
+    target = len(analyze.allocate_map_budget(duration, CLUSTERED_SIG))
+    assert target == 12  # 이 케이스의 전제 조건 — 깨지면 테스트 자체를 재검토
+
+    def fake_extract(video, timestamps, res, out_dir):
+        return [Path(f"t{t:.2f}") for t in timestamps]
+
+    calls = {"n": 0}
+
+    def fake_dedup(paths, threshold=2.0):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            kept = paths[:11]           # 라운드1: 12 -> 11 (실측 t0550 케이스와 동형)
+        else:
+            kept = paths[:9]            # 이후 라운드: 후보가 늘었는데도 오히려 9로 퇴보
+        return kept, len(paths) - len(kept)
+
+    monkeypatch.setattr(analyze.frames, "extract_frames", fake_extract)
+    monkeypatch.setattr(analyze.frames, "dedup_frames", fake_dedup)
+
+    kept, dropped = analyze.extract_map_frames(Path("video.mp4"), duration, CLUSTERED_SIG, tmp_path)
+    assert len(kept) == 11  # 라운드1(더 나은 결과)이 유지돼야 함 — 라운드2의 9로 퇴보 금지
+
+
 def test_lru_evict_removes_oldest_video_only(tmp_path, monkeypatch):
     monkeypatch.setattr(analyze.common, "CACHE_ROOT", tmp_path)
     monkeypatch.setattr(analyze.common, "load_config", lambda: {"CACHE_MAX_VIDEOS": "2"})

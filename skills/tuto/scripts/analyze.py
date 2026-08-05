@@ -64,26 +64,33 @@ def allocate_map_budget(duration: float, sig: dict, extra: int = 0) -> list:
 def extract_map_frames(video_path: Path, duration: float, sig: dict, out_dir: Path) -> tuple:
     """지도 프레임 추출: allocate_map_budget()의 floor는 "최소 커버리지" 보장이지 희망사항이
     아니다. dedup이 근접중복(예: 정지 화면 인접 프레임)을 솎아내며 그 floor를 갉아먹으면,
-    다음 순위 후보를 추가로 요청해(extra) 목표치를 재충전한다. allocate_map_budget(extra=k)의
-    선택 순서는 extra=0일 때와 동일한 그리디 결정열의 연장이므로(같은 cands, 같은 정렬,
-    target만 다름) 항상 이전 결과의 상위집합을 반환 — 이미 추출된 프레임은 frames.extract_frames
-    의 존재 확인으로 재추출되지 않는다. 후보 풀이 소진되면(더 못 늘면) 있는 그대로 반환한다 —
-    변화가 적은 짧은 영상의 정상적 한계다."""
+    다음 순위 후보를 추가로 요청해(extra) 목표치를 재충전한다.
+
+    **target-growth retry with best-of selection이지 상위집합(superset) 보장이 아니다.**
+    allocate_map_budget(extra=k)는 그리드를 매번 target 기준으로 재생성하므로(§P4 참조) 이전
+    호출과 그리드 후보 자체가 달라져, 라운드가 진행될수록 결과가 항상 더 커지거나 이전 결과를
+    포함한다는 보장이 없다 — 오히려 그리드가 촘촘해질수록 인접 후보가 시각적으로 더 비슷해져
+    dedup에서 더 많이 깎일 수 있다(실측: EMPTY_SIG에서 extra=1 시 상위집합 불성립 확인). 그래서
+    라운드마다 kept 개수를 비교해 **최댓값(best-so-far)** 만 유지한다 — 나중 라운드가 더
+    나쁘면 그 결과는 버리고 이전 best를 반환한다. 루프는 최대 4회로 캡돼 있고, 후보 풀이
+    소진돼 grown이 더 못 늘어나면 그 즉시 종료한다."""
     ts = allocate_map_budget(duration, sig)
     target = len(ts)
-    kept, dropped = [], 0
+    best_kept, best_dropped = [], 0
     extra = 0
     for _ in range(4):
         raw = frames.extract_frames(video_path, sorted(ts), 512, out_dir)
         kept, dropped = frames.dedup_frames(raw)
-        if len(kept) >= target:
+        if len(kept) > len(best_kept):
+            best_kept, best_dropped = kept, dropped
+        if len(best_kept) >= target:
             break
-        extra += max(1, target - len(kept))
+        extra += max(1, target - len(best_kept))
         grown = allocate_map_budget(duration, sig, extra=extra)
         if len(grown) <= len(ts):
             break                                    # 후보 풀 소진 — 더 보강 불가
         ts = grown
-    return kept, dropped
+    return best_kept, best_dropped
 
 
 def _sub_langs_for(lang: str) -> str:
