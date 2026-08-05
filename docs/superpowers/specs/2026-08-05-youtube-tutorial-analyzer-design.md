@@ -120,11 +120,11 @@ YoutubeAnalayzer/
 | 스크립트 | 역할 | 입력 | 출력 |
 |---|---|---|---|
 | `setup.py` | 프리플라이트. ffmpeg/yt-dlp 존재·버전, 키 유무, faster-whisper 설치 여부 | `--check`(무음) / `--json` | 종료코드 + 상태 JSON |
-| `analyze.py` | 패스 1 오케스트레이션: 다운로드→signals→transcribe→지도 프레임 | URL, `--cleanup` | stdout 보고서 (상태 헤더 + 자막 + 신호 요약 + 프레임 경로) |
+| `analyze.py` | 패스 1 오케스트레이션: 다운로드→signals→transcribe→지도 프레임. **지도 예산 배분기 소유** (신호 가중 배치 계산, ~36장은 30분 기준·길이 비례) | URL, `--cleanup` | stdout 보고서 (상태 헤더 + 자막 + 신호 요약 + 프레임 경로) |
 | `signals.py` | 4신호 수집. 활동 곡선 = 1fps 썸네일 16×16 그레이스케일 인접 차분 | video_id 또는 로컬 경로 | signals.json |
 | `transcribe.py` | 자막 사슬. VTT 롤링 중복 제거, VAD, 반복 환각 필터 | video_id, `--whisper groq\|local`, `--no-whisper` | transcript.json |
 | `frames.py` | 가중 배치 추출 + dedup. 지도/확대 공용 | 배치 계획(타임스탬프 목록), `--res` | frames/ + 경로 목록 |
-| `zoom.py` | 패스 2·검증·Q&A 재확대. 캐시된 video.mp4에서 재다운로드 없이 | `--ranges`, `--timestamps`, `--res` | frames/ + 경로 목록 |
+| `zoom.py` | 패스 2·검증·Q&A 재확대. 캐시된 video.mp4에서 재다운로드 없이. **확대 예산 가드 소유** (구간 캡·글로벌 캡 강제) | `--ranges`, `--timestamps`, `--res` | frames/ + 경로 목록 |
 
 ## 5. 핵심 설계 결정과 근거
 
@@ -170,9 +170,9 @@ transcript.json + signals.json을 다시 읽는 것으로 복원 (video.mp4가 L
 
 ### 8.1 표본 감사 프로토콜 (v1 자동화)
 
-가이드 확정 전, 주장(설정값·버튼명·순서) 중 무작위 K=10개를 **독립 컨텍스트**에서 재검증.
-검증자는 가이드 본문 없이 "주장 + 인용 프레임"만 받고 반박을 시도한다 (자기 검증의 상관
-오류 방지). 결과는 가이드에 스탬프로 부착:
+가이드 확정 전, 주장(설정값·버튼명·순서) 중 무작위 K=10개를 **독립 컨텍스트**(서브에이전트
+호출, 가이드 작성 컨텍스트와 분리)에서 재검증. 검증자는 가이드 본문 없이 "주장 + 인용
+프레임"만 받고 반박을 시도한다 (자기 검증의 상관 오류 방지). 결과는 가이드에 스탬프로 부착:
 
 ```
 📋 표본 감사: 10개 주장 중 9 일치, 1 불일치(수정됨) — 추정 오류율 ~10%
