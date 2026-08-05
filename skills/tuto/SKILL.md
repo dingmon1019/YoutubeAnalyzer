@@ -24,7 +24,9 @@ user-invocable: true
 ## 1. 패스 1 — 지도
 
 `python "<SKILL_DIR>/scripts/analyze.py" "<url>"`를 실행하고, 보고서의 STATUS 줄을 가장 먼저
-확인한다.
+확인한다. **Bash 도구 timeout은 600000(10분)으로 지정한다** — 다운로드·프레임 추출·dedup
+썸네일링까지 합치면 기본 2분 제한을 넘기기 쉽다. zoom.py도 구간이 길거나 여러 개면 동일하게
+timeout 600000을 지정한다.
 - flags에 자막 없음(no transcript available)이 있으면 사용자에게 알리고 프레임 중심으로
   진행한다 (가이드 상단에 한계를 명시).
 - 30분 초과 WARNING이 있으면 사용자에게 구간 지정을 제안하고 진행 여부를 확인한다.
