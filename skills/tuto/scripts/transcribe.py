@@ -142,6 +142,18 @@ def _split_audio(audio_path, chunk_sec: int = CHUNK_SEC) -> list:
     return sorted(audio_path.parent.glob("chunk_*.mp3"))
 
 
+def _probe_duration(path) -> float:
+    """ffprobe로 청크 실제 길이 측정. ffmpeg -f segment -c copy는 프레임 경계에서 잘라
+    실제 길이가 명목상 CHUNK_SEC과 어긋나므로, 다음 청크 오프셋은 이 실측값을 누적해야 함."""
+    import subprocess
+    p = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+    )
+    return float(p.stdout.strip())
+
+
 def groq_transcribe(audio_path, api_key: str) -> list:
     chunks = [audio_path] if audio_path.stat().st_size <= GROQ_LIMIT else _split_audio(audio_path)
     segs, offset = [], 0.0
@@ -155,7 +167,13 @@ def groq_transcribe(audio_path, api_key: str) -> list:
                 "end": float(s["end"]) + offset,
                 "text": s["text"].strip(),
             })
-        offset = (i + 1) * float(CHUNK_SEC)
+        if i + 1 < len(chunks):  # 마지막 청크 뒤에는 오프셋이 쓰일 데가 없으므로 측정 생략
+            try:
+                offset += _probe_duration(chunk)
+            except Exception:
+                # 측정 실패 시 명목상 CHUNK_SEC으로 폴백 — 오차는 프레임 경계 수준으로 제한되어
+                # 허용 가능 (조용한 폴백; 이 레이어에서는 별도 플래그를 남기지 않음).
+                offset += float(CHUNK_SEC)
     return segs
 
 
@@ -198,11 +216,19 @@ def get_transcript(cache_dir: Path, mode: str = "auto") -> dict:
                 except Exception as e:
                     result["flags"].append(f"groq_failed: {str(e)[:200]}")
             if segs is None and mode in ("auto", "local"):
-                segs = local_transcribe(audio)
-                if segs is not None:
-                    result["source"] = "local"
+                try:
+                    segs = local_transcribe(audio)
+                    if segs is not None:
+                        result["source"] = "local"
+                except Exception as e:
+                    result["flags"].append(f"local_failed: {str(e)[:200]}")
+                    segs = None
             if segs:
-                silences = detect_silences(audio)
+                try:
+                    silences = detect_silences(audio)
+                except Exception as e:
+                    result["flags"].append(f"silence_detect_failed: {str(e)[:200]}")
+                    silences = []
                 segs, sil_n = drop_silence_overlap(segs, silences)
                 segs, rep_n = collapse_repeats(segs)
                 if sil_n:
