@@ -94,15 +94,39 @@ def extract_map_frames(video_path: Path, duration: float, sig: dict, out_dir: Pa
     return best_kept, best_dropped
 
 
-def _sub_langs_for(lang: str) -> str:
+def _pick_lang_from_info(info: dict) -> str:
+    """info['subtitles'] 다음 info['automatic_captions'] 순으로 실제 트랙 딕셔너리 키를
+    조사해 원어로 보이는 트랙 코드 하나를 고른다. 하이픈 포함 키(지역 변형·자동자막의
+    "-orig" 자체 등)는 표기 변형/파생 트랙으로 보고 후보에서 제외한다. 남은 후보 중
+    "ko" 우선, 그다음 "en", 그래도 없으면 (딕셔너리 삽입 순서상) 첫 키를 쓴다. 두 필드가
+    다 없거나 비어 있으면 빈 문자열을 반환해 호출부가 기존 폴백("ko,en")을 쓰게 한다."""
+    for field in ("subtitles", "automatic_captions"):
+        keys = [k for k in (info.get(field) or {}).keys() if "-" not in k]
+        if not keys:
+            continue
+        if "ko" in keys:
+            return "ko"
+        if "en" in keys:
+            return "en"
+        return keys[0]
+    return ""
+
+
+def _sub_langs_for(lang: str, info: dict = None) -> str:
     """언어 코드 → yt-dlp `--sub-langs` 후보 CSV. YouTube의 info['language']는 지역 변형
     (예: en-US, ko-KR)일 수 있지만 자막/자동자막 트랙 딕셔너리 키는 보통 기본 코드(en, ko)다.
     exact-match인 --sub-langs에 지역 변형만 넘기면 조용히 0건 매치되어(에러 없이 그냥 subs
     파일이 안 생김) 자막 사슬 전체가 whisper 폴백으로 샌다 — 실측(YKSpANU8jPE, language=
     en-US)에서 STATUS가 captions(en) 대신 local()로 나온 원인. 같은 언어의 표기 변형만
-    넓히므로 함수 docstring이 경계하는 "다른 언어가 함께 받아지는" 오염 위험은 없다."""
+    넓히므로 함수 docstring이 경계하는 "다른 언어가 함께 받아지는" 오염 위험은 없다.
+
+    lang 자체가 없는 영상(info['language'] 필드 부재)은 예전엔 무조건 "ko,en"을 요청해,
+    두 트랙이 다 있는 한국어 영상에서도 영어 자동번역이 섞여 들어올 여지가 있었다 —
+    info가 주어지면 실제 트랙 목록(_pick_lang_from_info)을 먼저 봐서 그 오염을 줄인다."""
     if not lang:
-        return "ko,en"
+        lang = _pick_lang_from_info(info) if info else ""
+        if not lang:
+            return "ko,en"
     base = lang.split("-")[0]
     seen = dict.fromkeys((lang, f"{lang}-orig", base, f"{base}-orig"))  # 순서 보존 dedup
     return ",".join(seen)
@@ -138,7 +162,7 @@ def download(url: str, cd: Path) -> dict:
 
     if not video_f.exists():
         # 2단계: 실제 미디어 + 자막. language는 1단계(또는 기존 info.json)에서 확인한 값.
-        sub_langs = _sub_langs_for(info.get("language"))
+        sub_langs = _sub_langs_for(info.get("language"), info)
         common.run([
             "yt-dlp", url,
             "-f", "bv*[height<=720]+ba/b[height<=720]", "--merge-output-format", "mp4",
@@ -221,6 +245,12 @@ def run_pass1(url: str) -> int:
     print(f"== CACHE == {cd}")
     if duration > 1860:
         print("WARNING: video exceeds 30min design target — map is sparse; consider --ranges zoom on a section")
+    transcript_chars = sum(len(s["text"]) for s in tr["segments"])
+    if transcript_chars > 30000:
+        # v1은 자동 압축하지 않는다(fail-loud) — §3.3 토큰 예산(패스1 자막 ~15k) 초과
+        # 가능성을 사람이 보게만 한다.
+        print(f"WARNING: transcript large (~{transcript_chars // 1000}k chars) — "
+              f"consider chapter-level condensation per spec §3.3")
     evicted = lru_evict()
     if evicted:
         print(f"lru_evicted: {evicted}")

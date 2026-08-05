@@ -91,6 +91,33 @@ def test_sub_langs_for_missing_language_falls_back():
     assert analyze._sub_langs_for("") == "ko,en"
 
 
+def test_sub_langs_for_picks_ko_from_subtitles_when_language_missing():
+    """리뷰 발견(Finding F2): info['language']가 비어 있으면(일부 영상은 이 필드 자체가
+    없다) 기존엔 무조건 "ko,en"을 요청해 두 트랙이 다 있는 한국어 영상에서도 영어
+    자동번역이 섞여 들어올 수 있었다 — 실제 트랙 목록을 먼저 봐야 한다."""
+    info = {"subtitles": {"ko": [{"ext": "vtt"}]}}
+    assert analyze._sub_langs_for(None, info) == "ko,ko-orig"
+
+
+def test_sub_langs_for_prefers_en_when_ko_absent_from_subtitles():
+    info = {"subtitles": {"en": [{"ext": "vtt"}], "fr": [{"ext": "vtt"}]}}
+    assert analyze._sub_langs_for(None, info) == "en,en-orig"
+
+
+def test_sub_langs_for_falls_back_to_automatic_captions_when_subtitles_empty():
+    info = {"subtitles": {}, "automatic_captions": {"ko": [{"ext": "vtt"}], "fr": [{"ext": "vtt"}]}}
+    assert analyze._sub_langs_for(None, info) == "ko,ko-orig"
+
+
+def test_sub_langs_for_skips_hyphenated_keys_and_picks_first_remaining():
+    info = {"subtitles": {"fr-orig": [{"ext": "vtt"}], "de": [{"ext": "vtt"}], "fr": [{"ext": "vtt"}]}}
+    assert analyze._sub_langs_for(None, info) == "de,de-orig"
+
+
+def test_sub_langs_for_no_info_still_falls_back():
+    assert analyze._sub_langs_for(None, None) == "ko,en"
+
+
 def test_allocate_extra_grows_pool_when_activity_signal_is_rich():
     base = analyze.allocate_map_budget(352.0, RICH_SIG)
     grown = analyze.allocate_map_budget(352.0, RICH_SIG, extra=1)
@@ -203,6 +230,40 @@ def test_extract_map_frames_caps_target_at_40_for_long_video(monkeypatch, tmp_pa
     kept, dropped = analyze.extract_map_frames(Path("video.mp4"), duration, dense, tmp_path)
     assert all(c <= 40 for c in requested_counts)   # 어떤 라운드도 40장 초과 요청 안 함
     assert len(kept) == 5                            # best-so-far — 상한에 막혀 더는 못 늘어남
+
+
+def _stub_pass1_deps(monkeypatch, transcript_text):
+    """run_pass1의 외부 I/O 경계(다운로드·신호·자막·지도 프레임·LRU)를 전부 대체해,
+    순수 오케스트레이션 로직(WARNING 출력 등)만 네트워크/ffmpeg 없이 검증 가능하게 한다."""
+    monkeypatch.setattr(analyze, "download", lambda url, cd: {"duration": 600, "id": "vid"})
+    monkeypatch.setattr(analyze.sig_mod, "build_signals", lambda info, vid, path: {
+        "chapters": [], "heatmap": [], "sponsorblock": [], "desc_timestamps": [],
+        "activity": {"curve": [], "peaks": []}, "flags": [],
+    })
+    segs = [{"start": 0, "end": 1, "text": transcript_text}] if transcript_text else []
+    monkeypatch.setattr(analyze.transcribe, "get_transcript", lambda cd, mode: {
+        "source": "captions", "lang": "ko", "segments": segs, "flags": [], "dupes_removed": 0,
+    })
+    monkeypatch.setattr(analyze, "extract_map_frames", lambda *a, **kw: ([], 0))
+    monkeypatch.setattr(analyze, "lru_evict", lambda: [])
+
+
+def test_run_pass1_warns_on_large_transcript(tmp_path, monkeypatch, capsys):
+    """리뷰 발견(Finding F3): 토큰 예산(§3.3, 패스1 자막 ~15k) 약속이 코드에서 강제되지
+    않는다. v1은 자동 압축하지 않되(fail-loud), 최소한 큰 자막에 대해 경고는 해야 한다."""
+    monkeypatch.setattr(analyze.common, "CACHE_ROOT", tmp_path)
+    _stub_pass1_deps(monkeypatch, "x" * 31000)
+    analyze.run_pass1("https://youtu.be/dQw4w9WgXcQ")
+    out = capsys.readouterr().out
+    assert "WARNING: transcript large" in out
+
+
+def test_run_pass1_no_warning_when_transcript_small(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(analyze.common, "CACHE_ROOT", tmp_path)
+    _stub_pass1_deps(monkeypatch, "x" * 100)
+    analyze.run_pass1("https://youtu.be/dQw4w9WgXcQ")
+    out = capsys.readouterr().out
+    assert "WARNING: transcript large" not in out
 
 
 def test_lru_evict_removes_oldest_video_only(tmp_path, monkeypatch):
