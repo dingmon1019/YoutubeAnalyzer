@@ -73,6 +73,24 @@ CLUSTERED_SIG = {
 }
 
 
+def test_sub_langs_for_widens_regional_code_to_base():
+    """실측(YKSpANU8jPE): info['language']='en-US'인데 automatic_captions 키는 'en'/'en-orig'
+    뿐이라, exact-match인 --sub-langs가 'en-US,en-US-orig'만 요청하면 조용히 0건 매치되어
+    자막 사슬 전체가 local whisper로 새버렸다 — captions(en)이어야 할 STATUS가 local()로 나옴."""
+    langs = analyze._sub_langs_for("en-US").split(",")
+    assert "en" in langs
+    assert "en-orig" in langs
+
+
+def test_sub_langs_for_plain_code_unchanged_shape():
+    assert set(analyze._sub_langs_for("ko").split(",")) == {"ko", "ko-orig"}
+
+
+def test_sub_langs_for_missing_language_falls_back():
+    assert analyze._sub_langs_for(None) == "ko,en"
+    assert analyze._sub_langs_for("") == "ko,en"
+
+
 def test_allocate_extra_grows_pool_when_activity_signal_is_rich():
     base = analyze.allocate_map_budget(352.0, RICH_SIG)
     grown = analyze.allocate_map_budget(352.0, RICH_SIG, extra=1)

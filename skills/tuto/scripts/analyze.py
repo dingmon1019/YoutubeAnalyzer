@@ -86,6 +86,20 @@ def extract_map_frames(video_path: Path, duration: float, sig: dict, out_dir: Pa
     return kept, dropped
 
 
+def _sub_langs_for(lang: str) -> str:
+    """언어 코드 → yt-dlp `--sub-langs` 후보 CSV. YouTube의 info['language']는 지역 변형
+    (예: en-US, ko-KR)일 수 있지만 자막/자동자막 트랙 딕셔너리 키는 보통 기본 코드(en, ko)다.
+    exact-match인 --sub-langs에 지역 변형만 넘기면 조용히 0건 매치되어(에러 없이 그냥 subs
+    파일이 안 생김) 자막 사슬 전체가 whisper 폴백으로 샌다 — 실측(YKSpANU8jPE, language=
+    en-US)에서 STATUS가 captions(en) 대신 local()로 나온 원인. 같은 언어의 표기 변형만
+    넓히므로 함수 docstring이 경계하는 "다른 언어가 함께 받아지는" 오염 위험은 없다."""
+    if not lang:
+        return "ko,en"
+    base = lang.split("-")[0]
+    seen = dict.fromkeys((lang, f"{lang}-orig", base, f"{base}-orig"))  # 순서 보존 dedup
+    return ",".join(seen)
+
+
 def download(url: str, cd: Path) -> dict:
     """yt-dlp 720p+info.json+자막(원어, auto 포함) 한 번에. info.json 반환. 이미 있으면 재사용.
 
@@ -116,8 +130,7 @@ def download(url: str, cd: Path) -> dict:
 
     if not video_f.exists():
         # 2단계: 실제 미디어 + 자막. language는 1단계(또는 기존 info.json)에서 확인한 값.
-        lang = info.get("language")
-        sub_langs = f"{lang},{lang}-orig" if lang else "ko,en"
+        sub_langs = _sub_langs_for(info.get("language"))
         common.run([
             "yt-dlp", url,
             "-f", "bv*[height<=720]+ba/b[height<=720]", "--merge-output-format", "mp4",
