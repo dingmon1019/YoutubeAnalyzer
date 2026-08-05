@@ -237,6 +237,11 @@ transcript.json + signals.json을 다시 읽는 것으로 복원 (video.mp4가 L
 ## 11. 향후 확장 (비범위 상세)
 
 - `--ocr`: PaddleOCR/RapidOCR로 프레임 텍스트를 곁들여 이미지 토큰 절감 (Video-RAG 원리, v2 후보)
+- ASR 백엔드 추가: `transcribe.py` 인터페이스는 교체 가능 — 후보(예: Qwen3-ASR)는 골든셋(§8.3)
+  설정값 일치율로 A/B 평가 후 채택. 2026-08 실측(OpenKoASR): 한국어 CER 기준 whisper-large-v3가
+  여전히 1위(전화음성 0.096 vs Qwen3-ASR-1.7B 0.168), 클린 음성은 동급 — 교체 근거 없음
+- 정밀 타임스탬프: Qwen3-ForcedAligner-0.6B(한국어 지원, Apache-2.0)로 단어 단위 정렬 →
+  확대 구간 타겟팅 정밀화 (자동자막 큐 단위 타임스탬프의 한계 보완)
 - 1시간+ 영상: VideoTree식 계층 구조 검토
 - Gemini 무료 한도 하이브리드: 긴 영상 1차 지도만 위임 (최후방)
 - 공개 배포: macOS/Linux, 영문 문서, 마켓플레이스 등록
