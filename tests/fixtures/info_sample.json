@@ -1,0 +1,15 @@
+{
+  "id": "abc12345678",
+  "duration": 300,
+  "chapters": [
+    {"start_time": 0, "end_time": 60, "title": "인트로"},
+    {"start_time": 60, "end_time": 200, "title": "설치"},
+    {"start_time": 200, "end_time": 300, "title": "실행"}
+  ],
+  "heatmap": [
+    {"start_time": 0.0, "end_time": 3.0, "value": 1.0},
+    {"start_time": 3.0, "end_time": 6.0, "value": 0.4},
+    {"start_time": 6.0, "end_time": 9.0, "value": 0.1}
+  ],
+  "description": "튜토리얼입니다\n00:00 시작\n01:00 설치 방법\n03:20 실행하기\n감사합니다"
+}
