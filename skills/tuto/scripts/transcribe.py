@@ -11,7 +11,7 @@ from pathlib import Path
 import common
 
 _TS_LINE = re.compile(
-    r"(\d{2}:\d{2}:\d{2})\.(\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2})\.(\d{3})"
+    r"((?:\d{2}:)?\d{2}:\d{2}\.\d{3})\s*-->\s*((?:\d{2}:)?\d{2}:\d{2}\.\d{3})"
 )
 _INLINE = re.compile(r"<[^>]+>")
 _SIL = re.compile(r"silence_(start|end): ([\d.]+)")
@@ -22,6 +22,12 @@ NO_SPEECH_MAX = 0.6
 CHUNK_SEC = 1200
 
 
+def _parse_cue_time(token: str) -> float:
+    """VTT 큐 타임스탬프 하나(HH:MM:SS.mmm 또는 시(H) 생략된 MM:SS.mmm)를 초로 변환."""
+    left, ms = token.rsplit(".", 1)
+    return common.parse_ts(left) + int(ms) / 1000
+
+
 def parse_vtt(text: str) -> list:
     cues, cur = [], None
     for line in text.splitlines():
@@ -29,8 +35,8 @@ def parse_vtt(text: str) -> list:
         if m:
             if cur and cur["text"]:
                 cues.append(cur)
-            start = common.parse_ts(m.group(1)) + int(m.group(2)) / 1000
-            end = common.parse_ts(m.group(3)) + int(m.group(4)) / 1000
+            start = _parse_cue_time(m.group(1))
+            end = _parse_cue_time(m.group(2))
             cur = {"start": start, "end": end, "text": ""}
         elif not line.strip():  # blank line resets cur
             if cur and cur["text"]:
@@ -88,6 +94,10 @@ def detect_silences(audio_path) -> list:
          "-f", "null", "-"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600,
     )
+    if p.returncode != 0:
+        # returncode를 무시하면 ffmpeg가 조용히 실패했을 때 partial/empty stderr를 그냥
+        # "무음 없음"으로 파싱해버려 P5(무음 환각) 방어가 조용히 무력화된다.
+        raise RuntimeError(f"detect_silences ffmpeg failed (rc={p.returncode}): {p.stderr[-300:]}")
     events, start = [], None
     for kind, val in _SIL.findall(p.stderr):
         if kind == "start":
@@ -198,12 +208,22 @@ def _extract_audio(cache_dir: Path) -> Path:
 def get_transcript(cache_dir: Path, mode: str = "auto") -> dict:
     result = {"source": "none", "lang": "", "segments": [], "flags": [], "dupes_removed": 0}
     vtts = sorted(cache_dir.glob("subs*.vtt"))
-    if vtts and mode != "no-captions-test":
-        lang = "ko" if ".ko" in vtts[0].name else ("en" if ".en" in vtts[0].name else "?")
-        cues = parse_vtt(vtts[0].read_text(encoding="utf-8", errors="replace"))
+    # 원어 자동자막 트랙(-orig)이 있으면 사전순(sorted()[0])보다 우선한다 — 그렇지 않으면
+    # 예: subs.en.vtt(번역본)가 subs.ko-orig.vtt(원어)를 알파벳순으로 조용히 이겨버린다.
+    orig_vtts = [v for v in vtts if "-orig" in v.name]
+    vtt = orig_vtts[0] if orig_vtts else (vtts[0] if vtts else None)
+    if vtt and mode != "no-captions-test":
+        lang = "ko" if ".ko" in vtt.name else ("en" if ".en" in vtt.name else "?")
+        cues = parse_vtt(vtt.read_text(encoding="utf-8", errors="replace"))
         segs, removed = dedup_cues(cues)
-        result.update(source="captions", lang=lang, segments=segs, dupes_removed=removed)
-    elif mode != "no-whisper":
+        if segs:
+            result.update(source="captions", lang=lang, segments=segs, dupes_removed=removed)
+        else:
+            # 캡션 파일은 있었지만(예: 헤더뿐이거나 지원 안 하는 타임스탬프 형식) 파싱 결과가
+            # 0세그먼트 — 예전에는 여기서 source="captions"로 영구 확정되어 whisper 사슬을
+            # 아예 시도조차 안 했다. 흔적을 남기고 아래에서 whisper로 폴백시킨다.
+            result["flags"].append(f"captions_unparseable: {vtt.name}")
+    if not result["segments"] and mode != "no-whisper":
         video = cache_dir / "video.mp4"
         if video.exists():
             audio = _extract_audio(cache_dir)
@@ -235,6 +255,13 @@ def get_transcript(cache_dir: Path, mode: str = "auto") -> dict:
                     result["flags"].append(f"silence_dropped: {sil_n}")
                 if rep_n:
                     result["flags"].append(f"repeats_collapsed: {rep_n}")
+                if not segs:
+                    # ASR는 세그먼트를 반환했지만 무음 드롭·반복 붕괴가 전부 걸러냈다 — "애초에
+                    # 0개 반환"(아래 elif 분기)과는 다른 상황이므로 같은 명명 패턴으로 구분해
+                    # 남긴다(둘 다 zero_segments지만 원인이 다르다).
+                    result["flags"].append(
+                        f"{result['source']}_zero_segments: post-filter removed all segments"
+                    )
                 result["segments"] = segs
             elif segs is not None:
                 # ASR 백엔드가 예외 없이 응답했지만(source가 이미 세팅됨) 세그먼트 0개 — VAD나

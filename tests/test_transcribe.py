@@ -2,6 +2,8 @@ import io
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "tuto" / "scripts"))
 import transcribe
 
@@ -155,6 +157,82 @@ def test_silence_detect_failure_keeps_segments(tmp_path, monkeypatch):
     r = transcribe.get_transcript(tmp_path, mode="auto")
     assert len(r["segments"]) == 1 and r["segments"][0]["text"] == "안녕하세요"
     assert any(f.startswith("silence_detect_failed") for f in r["flags"])
+
+
+def test_parse_vtt_mmss_no_hours():
+    """일부 자동자막 export는 큐 타임스탬프에 시(HH)가 없는 MM:SS.mmm만 쓴다 — 기존
+    정규식은 HH:MM:SS.mmm만 허용해 이런 큐를 통째로 못 읽고 조용히 cues=[]가 됐다."""
+    vtt = "WEBVTT\n\n05:30.500 --> 05:32.750\n안녕하세요\n"
+    cues = transcribe.parse_vtt(vtt)
+    assert len(cues) == 1
+    assert abs(cues[0]["start"] - 330.5) < 0.001
+    assert abs(cues[0]["end"] - 332.75) < 0.001
+
+
+def test_captions_unparseable_falls_through_to_whisper(tmp_path, monkeypatch):
+    """캡션 VTT 파일은 있지만(헤더뿐, 파싱 가능한 큐가 없음) 세그먼트가 0개면
+    "captions_unparseable" 플래그를 남기고 whisper 사슬로 폴백해야 한다 — 이전에는
+    source="captions"로 영구 확정되며 groq/local을 아예 시도조차 하지 않았다."""
+    (tmp_path / "subs.ko.vtt").write_text("WEBVTT\n\n", encoding="utf-8")
+    (tmp_path / "video.mp4").write_bytes(b"")
+    (tmp_path / "audio.mp3").write_bytes(b"")  # 이미 존재 → 실제 ffmpeg 추출 회피
+    monkeypatch.setattr(transcribe.common, "load_config", lambda: {"GROQ_API_KEY": "key"})
+    fake = {"segments": [{"start": 0.0, "end": 2.0, "text": "안녕하세요", "no_speech_prob": 0.1}]}
+    monkeypatch.setattr(transcribe, "_groq_request", lambda path, key: fake)
+    monkeypatch.setattr(transcribe, "detect_silences", lambda path: [])
+
+    r = transcribe.get_transcript(tmp_path, mode="auto")
+    assert r["source"] == "groq"
+    assert any(f.startswith("captions_unparseable") for f in r["flags"])
+
+
+def test_get_transcript_prefers_orig_vtt_over_sorted_first(tmp_path):
+    """언어 정렬(sorted()[0])은 예: subs.en.vtt(번역본) < subs.ko-orig.vtt(원어) 알파벳
+    순서상 번역본이 원어를 조용히 이겨버린다 — 원어 트랙(파일명에 -orig 포함)이 있으면
+    그걸 우선해야 한다."""
+    (tmp_path / "subs.en.vtt").write_text(
+        "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nhello\n", encoding="utf-8"
+    )
+    (tmp_path / "subs.ko-orig.vtt").write_text(
+        "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n안녕하세요\n", encoding="utf-8"
+    )
+    r = transcribe.get_transcript(tmp_path, mode="auto")
+    assert r["segments"][0]["text"] == "안녕하세요"
+    assert r["lang"] == "ko"
+
+
+def test_post_filter_zero_segments_flagged_distinctly(tmp_path, monkeypatch):
+    """ASR가 세그먼트를 반환했지만 무음 드롭으로 전부 걸러지면(예: 세그먼트가 통째로
+    무음 구간 안) "애초에 0개 반환"과는 다른 상황이므로 별도 zero_segments 플래그를
+    남겨야 한다 — 지금은 이 사실이 조용히 사라진다."""
+    (tmp_path / "video.mp4").write_bytes(b"")
+    (tmp_path / "audio.mp3").write_bytes(b"")
+    monkeypatch.setattr(transcribe.common, "load_config", lambda: {"GROQ_API_KEY": "key"})
+    fake = {"segments": [{"start": 10.0, "end": 12.0, "text": "감사합니다", "no_speech_prob": 0.1}]}
+    monkeypatch.setattr(transcribe, "_groq_request", lambda path, key: fake)
+    monkeypatch.setattr(transcribe, "detect_silences", lambda path: [(8.0, 20.0)])
+
+    r = transcribe.get_transcript(tmp_path, mode="auto")
+    assert r["segments"] == []
+    assert any(f.startswith("groq_zero_segments") for f in r["flags"])
+    assert any("silence_dropped" in f for f in r["flags"])
+
+
+def test_detect_silences_raises_on_nonzero_returncode(monkeypatch, tmp_path):
+    """ffmpeg가 존재해도 조용히 실패(잘못된 인자·손상 파일 등)하면 returncode != 0인데
+    지금까지는 이를 무시하고 partial/empty stderr를 그냥 파싱해 조용히 []를 반환했다 —
+    P5 무음 방어가 조용히 무력화된다."""
+    import subprocess as real_subprocess
+
+    def fake_run(cmd, **kw):
+        p = real_subprocess.CompletedProcess(cmd, 1)
+        p.stdout = ""
+        p.stderr = "Error: something broke"
+        return p
+
+    monkeypatch.setattr(real_subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError):
+        transcribe.detect_silences(tmp_path / "audio.mp3")
 
 
 def test_groq_transcribe_offset_uses_probed_duration(monkeypatch):
