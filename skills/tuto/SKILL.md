@@ -17,18 +17,20 @@ user-invocable: true
 
 ## 0. 프리플라이트 (세션 첫 호출만)
 
-`python scripts/setup.py --check`를 실행해 종료 코드를 확인한다.
+`python "<SKILL_DIR>/scripts/setup.py" --check`를 실행해 종료 코드를 확인한다.
 - 0이면 아무것도 출력하지 않고 다음 단계로 조용히 진행한다.
 - 2면 stderr에 출력된 설치 명령을 그대로 사용자에게 안내한다.
 
 ## 1. 패스 1 — 지도
 
-`python scripts/analyze.py "<url>"`를 실행하고, 보고서의 STATUS 줄을 가장 먼저 확인한다.
+`python "<SKILL_DIR>/scripts/analyze.py" "<url>"`를 실행하고, 보고서의 STATUS 줄을 가장 먼저
+확인한다.
 - flags에 자막 없음(no transcript available)이 있으면 사용자에게 알리고 프레임 중심으로
   진행한다 (가이드 상단에 한계를 명시).
 - 30분 초과 WARNING이 있으면 사용자에게 구간 지정을 제안하고 진행 여부를 확인한다.
 
-이어서 `== FRAMES ==` 아래 모든 FRAME 경로를 병렬로 Read한다.
+이어서 `== FRAMES ==` 아래 모든 FRAME 경로를 병렬로 Read한다. 보고서 마지막 `== CACHE ==`
+줄의 경로가 `<cache_dir>`다 — 이후 zoom-plan.json·guide.md 저장 경로로 사용한다.
 
 ## 2. 확대 계획 판정 → zoom-plan.json
 
@@ -61,8 +63,8 @@ user-invocable: true
 
 ## 3. 패스 2 — 확대
 
-`python scripts/zoom.py <video_id> --ranges "1:05-1:35@1024,4:10-4:40"`로 zoom-plan.json의
-구간을 확대 추출하고, 출력된 FRAME 경로를 전부 병렬로 Read한다.
+`python "<SKILL_DIR>/scripts/zoom.py" <video_id> --ranges "1:05-1:35@1024,4:10-4:40"`로
+zoom-plan.json의 구간을 확대 추출하고, 출력된 FRAME 경로를 전부 병렬로 Read한다.
 
 ## 4. 가이드 초안 → 검증 패스
 
@@ -76,7 +78,7 @@ user-invocable: true
 
 **검증 규칙 (환각 방지 철칙):**
 1. 프레임에서 또렷이 읽히지 않는 값은 쓰지 않는다. 재확대한다:
-   `python scripts/zoom.py <id> --timestamps "12:34@1024"`
+   `python "<SKILL_DIR>/scripts/zoom.py" <id> --timestamps "12:34@1024"`
 2. 재확대 후에도 불확실하면 그 값 자리에 `⚠️ 화면 확인 필요 (t=MM:SS)`라고 표기한다. 추측 금지.
 3. 자막이 말한 값과 화면의 값이 다르면 화면을 우선하고, 불일치는 각주로 남긴다.
 
