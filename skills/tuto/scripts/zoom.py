@@ -59,7 +59,8 @@ def plan_timestamps(ranges: list) -> list:
 
 
 def main() -> int:
-    sys.stdout.reconfigure(errors="replace")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
     ap = argparse.ArgumentParser()
     ap.add_argument("target", help="video_id 또는 캐시 경로")
     ap.add_argument("--ranges")
