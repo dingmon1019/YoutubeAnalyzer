@@ -7,6 +7,7 @@ prefix matching, not equality checks. Format: "identifier" or "identifier: detai
 import argparse
 import json
 import re
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -17,6 +18,7 @@ import common
 SB_API = "https://sponsor.ajay.app/api/skipSegments"
 SB_CATS = '["sponsor","selfpromo","intro","outro","filler"]'
 _DESC_TS = re.compile(r"^\s*\(?(\d{1,2}:\d{2}(?::\d{2})?)\)?\s*[-–—:]?\s*(.+)$")
+FRAME_BYTES = 256  # 16x16 gray
 
 
 def _http_get(url: str, timeout: int = 15) -> str:
@@ -61,24 +63,63 @@ def fetch_sponsorblock(video_id: str) -> list:
     ]
 
 
+def activity_curve(video_path) -> list:
+    p = subprocess.run(
+        ["ffmpeg", "-i", str(video_path), "-vf", "fps=1,scale=16:16,format=gray",
+         "-f", "rawvideo", "-v", "error", "-"],
+        capture_output=True, timeout=600,
+    )
+    if p.returncode != 0:
+        raise RuntimeError(f"activity_curve ffmpeg failed: {p.stderr[-500:]}")
+    raw = p.stdout
+    frames = [raw[i:i + FRAME_BYTES] for i in range(0, len(raw) - FRAME_BYTES + 1, FRAME_BYTES)]
+    curve = [0.0]
+    for prev, cur in zip(frames, frames[1:]):
+        curve.append(sum(abs(a - b) for a, b in zip(prev, cur)) / FRAME_BYTES)
+    return curve
+
+
+def find_peaks(curve: list, min_gap: int = 10) -> list:
+    if not curve:
+        return []
+    mean = sum(curve) / len(curve)
+    var = sum((v - mean) ** 2 for v in curve) / len(curve)
+    thresh = mean + var ** 0.5
+    cands = sorted(
+        (i for i in range(1, len(curve) - 1)
+         if curve[i] >= thresh and curve[i] >= curve[i - 1] and curve[i] >= curve[i + 1]),
+        key=lambda i: -curve[i],
+    )
+    kept = []
+    for i in cands:
+        if all(abs(i - k) >= min_gap for k in kept):
+            kept.append(i)
+    return sorted(kept)
+
+
 def build_signals(info: dict, video_id: str, video_path, curve=None) -> dict:
     flags = []
     try:
         sb = fetch_sponsorblock(video_id)
     except Exception as e:
         sb, flags = [], [f"sponsorblock_error: {e}"]
+    if curve is None and video_path and Path(video_path).exists():
+        curve = activity_curve(video_path)
+    curve = curve or []
     sig = {
         "heatmap": parse_heatmap(info),
         "chapters": parse_chapters(info),
         "desc_timestamps": parse_description_timestamps(info),
         "sponsorblock": sb,
-        "activity": {"curve": curve or [], "peaks": []},
+        "activity": {"curve": [round(v, 2) for v in curve], "peaks": find_peaks(curve)},
         "flags": flags,
     }
     if not sig["heatmap"]:
         sig["flags"].append("heatmap_absent")
     if not sig["chapters"]:
         sig["flags"].append("chapters_absent")
+    if not curve:
+        sig["flags"].append("activity_absent")
     return sig
 
 
@@ -90,9 +131,12 @@ def main() -> int:
     info = json.loads((cd / "info.json").read_text(encoding="utf-8"))
     sig = build_signals(info, info["id"], cd / "video.mp4")
     (cd / "signals.json").write_text(json.dumps(sig, ensure_ascii=False, indent=1), encoding="utf-8")
+    curve = sig["activity"]["curve"]
+    peaks = sig["activity"]["peaks"]
     print(
         f"signals: heatmap={len(sig['heatmap'])} chapters={len(sig['chapters'])} "
         f"desc_ts={len(sig['desc_timestamps'])} sponsorblock={len(sig['sponsorblock'])} "
+        f"activity={len(curve)}pts/{len(peaks)}peaks "
         f"flags={sig['flags'] or 'none'}"
     )
     return 0

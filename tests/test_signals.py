@@ -60,5 +60,23 @@ def test_build_signals_sponsorblock_error_flag(monkeypatch):
 def test_build_signals_happy_path(monkeypatch):
     monkeypatch.setattr(signals, "fetch_sponsorblock", lambda vid: [{"start": 1.0, "end": 2.0, "category": "sponsor"}])
     sig = signals.build_signals(INFO, "abc12345678", None)
-    assert sig["flags"] == []
+    assert [f for f in sig["flags"] if not f.startswith("activity_absent")] == []
     assert len(sig["chapters"]) == 3 and len(sig["heatmap"]) == 3
+
+
+def test_activity_curve_finds_change(synth_clip):
+    curve = signals.activity_curve(synth_clip)
+    assert len(curve) >= 9  # 11초 클립 → ~10개 차분
+    peak_t = max(range(len(curve)), key=lambda i: curve[i])
+    assert 4 <= peak_t <= 7  # 변화 구간(5-6s) 부근
+    flat = curve[1:4]  # 정지(파랑) 구간
+    assert max(flat) < max(curve) * 0.3  # 정지 구간은 피크 대비 확연히 낮음
+
+
+def test_find_peaks_min_gap():
+    curve = [0.0] * 60
+    curve[10] = 50.0
+    curve[12] = 40.0  # 10과 2초 간격 — min_gap=10에 걸려 제외
+    curve[40] = 45.0
+    peaks = signals.find_peaks(curve, min_gap=10)
+    assert 10 in peaks and 40 in peaks and 12 not in peaks
