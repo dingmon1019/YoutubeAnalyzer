@@ -58,6 +58,14 @@ def main() -> int:
         return 0
     if args.check:
         if r["status"] == "ready":
+            if r["ytdlp_stale"]:
+                # exit 0은 유지한다(설치 자체는 끝난 상태) — 그래도 낡은 버전은 유튜브 측
+                # 변동에 취약(§5 P10)하므로 조용히 넘기지 않고 stderr에 흔적을 남긴다.
+                print(
+                    f"NOTE: yt-dlp {r['ytdlp_version']} looks stale (< {YTDLP_MIN}) — "
+                    f"update recommended: pip install -U yt-dlp",
+                    file=sys.stderr,
+                )
             return 0
         print("MISSING: " + ", ".join(r["missing"]), file=sys.stderr)
         print("install: winget install Gyan.FFmpeg ; pip install -U yt-dlp", file=sys.stderr)
