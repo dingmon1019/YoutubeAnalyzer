@@ -2,7 +2,7 @@
 name: tuto
 description: 유튜브 튜토리얼 영상(≤30분, 한/영)을 분석해 따라하기 스텝 가이드·요약·Q&A 상태를 만든다. URL을 받아 신호(히트맵·챕터·활동곡선) 가중 2패스로 화면 조작 순서와 설정값을 추출한다. "튜토리얼 분석", "따라하기 정리", "영상 스텝 뽑아줘" 요청 시 사용.
 argument-hint: "<video-url> [질문]"
-allowed-tools: Bash, Read, AskUserQuestion, Agent
+allowed-tools: Bash, Read, Write, Edit, AskUserQuestion, Agent
 user-invocable: true
 ---
 
