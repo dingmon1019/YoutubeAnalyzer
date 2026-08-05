@@ -21,7 +21,7 @@ def allocate_map_budget(duration: float, sig: dict, extra: int = 0) -> list:
     if duration <= 0:
         return []
     n = min(40, max(12, round(duration / 60 * 1.2)))
-    target = n + max(0, extra)
+    target = min(40, n + max(0, extra))            # 상한 40은 extra 보강에도 재적용(§3.3 예산 상한)
     min_gap = max(8.0, duration / n / 2)
     sb = sig.get("sponsorblock", [])
     cands = []                                     # (weight, t)
@@ -72,8 +72,9 @@ def extract_map_frames(video_path: Path, duration: float, sig: dict, out_dir: Pa
     포함한다는 보장이 없다 — 오히려 그리드가 촘촘해질수록 인접 후보가 시각적으로 더 비슷해져
     dedup에서 더 많이 깎일 수 있다(실측: EMPTY_SIG에서 extra=1 시 상위집합 불성립 확인). 그래서
     라운드마다 kept 개수를 비교해 **최댓값(best-so-far)** 만 유지한다 — 나중 라운드가 더
-    나쁘면 그 결과는 버리고 이전 best를 반환한다. 루프는 최대 4회로 캡돼 있고, 후보 풀이
-    소진돼 grown이 더 못 늘어나면 그 즉시 종료한다."""
+    나쁘면 그 결과는 버리고 이전 best를 반환한다. target은 allocate_map_budget 쪽에서 40으로
+    상한(§3.3 예산 상한)이 걸려 있어, extra가 아무리 커져도 그리드 재생성 결과가 결국
+    수렴하고(더 못 늘어나면 grown이 성장을 멈춰) 루프가 유한 회 안에 종료된다."""
     ts = allocate_map_budget(duration, sig)
     target = len(ts)
     best_kept, best_dropped = [], 0
@@ -88,7 +89,7 @@ def extract_map_frames(video_path: Path, duration: float, sig: dict, out_dir: Pa
         extra += max(1, target - len(best_kept))
         grown = allocate_map_budget(duration, sig, extra=extra)
         if len(grown) <= len(ts):
-            break                                    # 후보 풀 소진 — 더 보강 불가
+            break                                    # 후보 풀 소진(또는 40 상한 도달) — 더 보강 불가
         ts = grown
     return best_kept, best_dropped
 

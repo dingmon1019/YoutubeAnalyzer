@@ -163,6 +163,48 @@ def test_extract_map_frames_keeps_best_round_when_later_round_is_worse(monkeypat
     assert len(kept) == 11  # 라운드1(더 나은 결과)이 유지돼야 함 — 라운드2의 9로 퇴보 금지
 
 
+def test_allocate_extra_never_exceeds_spec_ceiling():
+    """리뷰 발견(Finding 2): target = n + extra에 40 상한을 다시 걸지 않으면, n이 이미
+    40인 긴 영상에서 backfill이 41 -> 50 -> 75 ...로 발산해 스펙(§3.3)의 지도 예산 상한
+    min(40, ...)을 조용히 깬다 (실측: extra=1000 -> len=75)."""
+    dense = {
+        "chapters": [], "heatmap": [], "sponsorblock": [],
+        "activity": {"curve": [], "peaks": list(range(5, 2000, 3))},
+    }
+    assert len(analyze.allocate_map_budget(2000.0, dense)) == 40  # 전제조건: n=40(상한)
+    for extra in (0, 1, 10, 100, 1000):
+        assert len(analyze.allocate_map_budget(2000.0, dense, extra=extra)) <= 40
+
+
+def test_extract_map_frames_caps_target_at_40_for_long_video(monkeypatch, tmp_path):
+    """리뷰 발견(Finding 2): n이 이미 스펙 상한(40)인 긴 영상에서 dedup이 매 라운드
+    계속 깎아내도(정적인 영상 시뮬레이션: 매번 5장만 생존) target이 40을 넘는 요청을
+    하면 안 되고, 루프도 유한 회 안에 종료돼야 한다(더 늘 후보가 없으면 즉시 멈춤)."""
+    duration = 2000.0
+    dense = {
+        "chapters": [], "heatmap": [], "sponsorblock": [],
+        "activity": {"curve": [], "peaks": list(range(5, 2000, 3))},
+    }
+    assert len(analyze.allocate_map_budget(duration, dense)) == 40  # 전제조건
+
+    requested_counts = []
+
+    def fake_extract(video, timestamps, res, out_dir):
+        requested_counts.append(len(timestamps))
+        return [Path(f"t{t:.2f}") for t in timestamps]
+
+    def fake_dedup(paths, threshold=2.0):
+        kept = paths[:5]            # 정적인 긴 영상: 매 라운드 5장만 생존
+        return kept, len(paths) - len(kept)
+
+    monkeypatch.setattr(analyze.frames, "extract_frames", fake_extract)
+    monkeypatch.setattr(analyze.frames, "dedup_frames", fake_dedup)
+
+    kept, dropped = analyze.extract_map_frames(Path("video.mp4"), duration, dense, tmp_path)
+    assert all(c <= 40 for c in requested_counts)   # 어떤 라운드도 40장 초과 요청 안 함
+    assert len(kept) == 5                            # best-so-far — 상한에 막혀 더는 못 늘어남
+
+
 def test_lru_evict_removes_oldest_video_only(tmp_path, monkeypatch):
     monkeypatch.setattr(analyze.common, "CACHE_ROOT", tmp_path)
     monkeypatch.setattr(analyze.common, "load_config", lambda: {"CACHE_MAX_VIDEOS": "2"})
