@@ -73,6 +73,8 @@ def activity_curve(video_path) -> list:
         raise RuntimeError(f"activity_curve ffmpeg failed: {p.stderr[-500:]}")
     raw = p.stdout
     frames = [raw[i:i + FRAME_BYTES] for i in range(0, len(raw) - FRAME_BYTES + 1, FRAME_BYTES)]
+    if len(frames) < 2:
+        return []
     curve = [0.0]
     for prev, cur in zip(frames, frames[1:]):
         curve.append(sum(abs(a - b) for a, b in zip(prev, cur)) / FRAME_BYTES)
@@ -104,7 +106,10 @@ def build_signals(info: dict, video_id: str, video_path, curve=None) -> dict:
     except Exception as e:
         sb, flags = [], [f"sponsorblock_error: {e}"]
     if curve is None and video_path and Path(video_path).exists():
-        curve = activity_curve(video_path)
+        try:
+            curve = activity_curve(video_path)
+        except Exception as e:
+            curve, flags = [], flags + [f"activity_error: {e}"]
     curve = curve or []
     sig = {
         "heatmap": parse_heatmap(info),
@@ -118,7 +123,7 @@ def build_signals(info: dict, video_id: str, video_path, curve=None) -> dict:
         sig["flags"].append("heatmap_absent")
     if not sig["chapters"]:
         sig["flags"].append("chapters_absent")
-    if not curve:
+    if not curve and not any(f.startswith("activity_error") for f in sig["flags"]):
         sig["flags"].append("activity_absent")
     return sig
 

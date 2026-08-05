@@ -80,3 +80,33 @@ def test_find_peaks_min_gap():
     curve[40] = 45.0
     peaks = signals.find_peaks(curve, min_gap=10)
     assert 10 in peaks and 40 in peaks and 12 not in peaks
+
+
+def test_activity_curve_returns_empty_on_single_frame(monkeypatch):
+    """activity_curve should return [] when <2 frames are extracted (video too short or truncated)."""
+    import subprocess
+    def fake_run(*args, **kwargs):
+        p = subprocess.CompletedProcess(args, returncode=0)
+        p.stdout = b"\x00" * signals.FRAME_BYTES  # exactly 1 frame
+        return p
+    monkeypatch.setattr(signals.subprocess, "run", fake_run)
+    curve = signals.activity_curve(Path("whatever"))
+    assert curve == []
+
+
+def test_build_signals_activity_error_flag(monkeypatch, tmp_path):
+    """build_signals should catch activity_curve errors, set curve=[], and append activity_error flag."""
+    def boom(video_path):
+        raise RuntimeError("corrupted video file")
+    monkeypatch.setattr(signals, "activity_curve", boom)
+    monkeypatch.setattr(signals, "fetch_sponsorblock", lambda vid: [])
+
+    # Create a fake video file so Path.exists() returns True
+    video_file = tmp_path / "video.mp4"
+    video_file.write_bytes(b"x")
+
+    sig = signals.build_signals(INFO, "abc12345678", video_file)
+    assert any(f.startswith("activity_error") for f in sig["flags"])
+    assert sig["activity"] == {"curve": [], "peaks": []}
+    # Should NOT have activity_absent since activity_error is present
+    assert not any(f.startswith("activity_absent") for f in sig["flags"])
