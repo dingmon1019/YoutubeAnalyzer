@@ -41,3 +41,10 @@ def test_load_config_parses_kv(tmp_path, monkeypatch):
     cfg = common.load_config()
     assert cfg["GROQ_API_KEY"] == "abc"
     assert cfg["CACHE_MAX_VIDEOS"] == "10"
+
+
+def test_load_config_strips_bom(tmp_path, monkeypatch):
+    f = tmp_path / ".env"
+    f.write_text("GROQ_API_KEY=abc\n", encoding="utf-8-sig")
+    monkeypatch.setattr(common, "CONFIG_FILE", f)
+    assert common.load_config().get("GROQ_API_KEY") == "abc"
