@@ -1,4 +1,9 @@
-"""4신호 수집: 히트맵·챕터·SponsorBlock·설명란 타임스탬프 (+활동 곡선은 T4). §6."""
+"""4신호 수집: 히트맵·챕터·SponsorBlock·설명란 타임스탬프 (+활동 곡선은 T4). §6.
+
+Flags contract: flags list contains prefix-matched identifiers (e.g., "heatmap_absent",
+"chapters_absent", "sponsorblock_error: <detail>"). Consumers must use startswith() for
+prefix matching, not equality checks. Format: "identifier" or "identifier: detail".
+"""
 import argparse
 import json
 import re

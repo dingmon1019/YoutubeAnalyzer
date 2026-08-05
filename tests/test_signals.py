@@ -37,3 +37,28 @@ def test_fetch_sponsorblock_parses(monkeypatch):
     monkeypatch.setattr(signals, "_http_get", lambda url, timeout: payload)
     segs = signals.fetch_sponsorblock("abc12345678")
     assert segs == [{"start": 10.0, "end": 42.5, "category": "sponsor"}]
+
+
+def test_build_signals_flags_when_absent(monkeypatch):
+    monkeypatch.setattr(signals, "fetch_sponsorblock", lambda vid: [])
+    sig = signals.build_signals({}, "abc12345678", None)
+    assert "heatmap_absent" in sig["flags"]
+    assert "chapters_absent" in sig["flags"]
+    assert sig["activity"] == {"curve": [], "peaks": []}
+    assert set(sig) == {"heatmap", "chapters", "desc_timestamps", "sponsorblock", "activity", "flags"}
+
+
+def test_build_signals_sponsorblock_error_flag(monkeypatch):
+    def boom(vid):
+        raise RuntimeError("network down")
+    monkeypatch.setattr(signals, "fetch_sponsorblock", boom)
+    sig = signals.build_signals(INFO, "abc12345678", None)
+    assert any(f.startswith("sponsorblock_error") for f in sig["flags"])
+    assert sig["sponsorblock"] == []
+
+
+def test_build_signals_happy_path(monkeypatch):
+    monkeypatch.setattr(signals, "fetch_sponsorblock", lambda vid: [{"start": 1.0, "end": 2.0, "category": "sponsor"}])
+    sig = signals.build_signals(INFO, "abc12345678", None)
+    assert sig["flags"] == []
+    assert len(sig["chapters"]) == 3 and len(sig["heatmap"]) == 3
