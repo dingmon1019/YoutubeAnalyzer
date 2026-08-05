@@ -236,6 +236,13 @@ def get_transcript(cache_dir: Path, mode: str = "auto") -> dict:
                 if rep_n:
                     result["flags"].append(f"repeats_collapsed: {rep_n}")
                 result["segments"] = segs
+            elif segs is not None:
+                # ASR 백엔드가 예외 없이 응답했지만(source가 이미 세팅됨) 세그먼트 0개 — VAD나
+                # no_speech_prob 필터가 스피치를 못 찾은 정상 케이스(예: 무음·ASMR류 오디오,
+                # 실측 zxTH99U21Rw 5분 클립: local_transcribe 21.7초 실행 후 [] 반환)다.
+                # "애초에 시도조차 안 함"과 구분되게 남긴다 — 바로 아래에서 source가 다시
+                # "none"으로 재설정돼도 이 시도 사실은 flags에 보존된다.
+                result["flags"].append(f"{result['source']}_zero_segments: ASR ran, no speech detected")
     if not result["segments"]:
         result["source"] = "none"
         result["flags"].append("no transcript available — frames-only mode")

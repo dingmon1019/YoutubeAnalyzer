@@ -122,6 +122,22 @@ def test_local_transcribe_failure_falls_to_none(tmp_path, monkeypatch):
     assert any(f.startswith("local_failed") for f in r["flags"])
 
 
+def test_local_zero_segments_recorded_distinctly_from_never_attempted(tmp_path, monkeypatch):
+    """L3 실측(zxTH99U21Rw, 5분 무자막 ASMR): faster-whisper가 예외 없이 정상 실행되고
+    VAD가 스피치를 못 찾아 세그먼트 0개를 반환하는 경우(직접 재현: local_transcribe()가
+    21.7초 걸려 실제로 돌고 [] 반환) — "애초에 시도조차 안 함"(예: faster-whisper 미설치로
+    None 반환)과는 다른 상황인데, 지금은 최종 source=none 재설정 시 flags에 "시도했지만
+    0건"이라는 사실 자체가 사라져 두 상황이 구분 불가능했다."""
+    (tmp_path / "video.mp4").write_bytes(b"")
+    (tmp_path / "audio.mp3").write_bytes(b"")  # 이미 존재 → 실제 ffmpeg 추출 회피
+    monkeypatch.setattr(transcribe.common, "load_config", lambda: {})  # GROQ_API_KEY 없음
+    monkeypatch.setattr(transcribe, "local_transcribe", lambda p: [])  # 실행은 됐지만 0세그먼트
+
+    r = transcribe.get_transcript(tmp_path, mode="auto")
+    assert r["source"] == "none" and r["segments"] == []
+    assert any("zero_segments" in f for f in r["flags"])
+
+
 def test_silence_detect_failure_keeps_segments(tmp_path, monkeypatch):
     """detect_silences가 예외를 던져도(ffmpeg 실패 등) 이미 얻은 세그먼트는 버리지 않고
     무음 드롭만 건너뛴 채 silence_detect_failed 플래그로 계속 진행해야 함."""
