@@ -1,7 +1,9 @@
 """프레임 추출 + dedup. 지도(analyze)와 확대(zoom)가 공용. §4."""
 import argparse
+import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import common
@@ -23,23 +25,32 @@ def _frame_tag(sec: float) -> str:
     return f"{tag}d{frac}" if frac else tag
 
 
+MAX_WORKERS = max(1, min(8, (os.cpu_count() or 4) - 1))
+
+
+def _extract_one(video, t: float, res: int, out_dir: Path):
+    p = out_dir / f"{_frame_tag(t)}_{res}.jpg"
+    if not p.exists():
+        try:
+            common.run(["ffmpeg", "-y", "-ss", f"{t:.2f}", "-i", video,
+                        "-frames:v", "1", "-vf", f"scale={res}:-2", "-q:v", "3", p])
+        except RuntimeError:
+            # 범위 밖 타임스탬프 등으로 이 한 장이 실패해도 배치 전체를 죽이지 않는다
+            return None
+    return p if p.exists() else None
+
+
 def extract_frames(video, timestamps: list, res: int, out_dir) -> list:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    paths = []
-    for t in timestamps:
-        p = out_dir / f"{_frame_tag(t)}_{res}.jpg"
-        if not p.exists():
-            try:
-                common.run(["ffmpeg", "-y", "-ss", f"{t:.2f}", "-i", video,
-                            "-frames:v", "1", "-vf", f"scale={res}:-2", "-q:v", "3", p])
-            except RuntimeError:
-                # 범위 밖 타임스탬프 등으로 이 한 장이 실패해도 배치 전체를 죽이지 않는다 —
-                # 예전엔 여기서 예외가 이미 성공한 프레임까지 통째로 날렸다.
-                continue
-        if p.exists():
-            paths.append(p)
-    return paths
+    # 실측 5.5초/장 직렬이 zoom 5.5분의 원인 — ffmpeg 호출을 병렬화한다. 같은 타임스탬프
+    # 중복은 한 번만 추출해(같은 출력 파일 동시 쓰기 방지) 결과 리스트에서 원래 순서·중복을
+    # 복원한다. ex.map은 입력 순서를 보존하므로 산출은 직렬과 결정적으로 동일하다.
+    unique = list(dict.fromkeys(timestamps))
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        results = dict(zip(unique, ex.map(
+            lambda t: _extract_one(video, t, res, out_dir), unique)))
+    return [results[t] for t in timestamps if results[t] is not None]
 
 
 _thumb_cache: dict = {}
@@ -64,6 +75,11 @@ def _thumb(path) -> bytes:
 
 
 def dedup_frames(paths: list, threshold: float = 2.0) -> tuple:
+    if len(paths) > 1:
+        # 프레임당 ffmpeg 썸네일도 직렬 병목 — 병렬로 _thumb_cache를 먼저 채운다.
+        # 이후 순차 ref-체인 비교는 캐시 적중이라 순서·결과가 직렬과 동일하다.
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+            list(ex.map(_thumb, paths))
     kept, ref = [], None
     for p in paths:
         t = _thumb(p)

@@ -71,3 +71,22 @@ def test_report_renders_subsecond_tag_as_whole_second(capsys, tmp_path):
     # 정확히 "t=00:05"로 끝나야 한다 — 데시초 접미사가 안 지워지면 "t=00:05:d5"처럼 뒤에
     # 더 붙어, 느슨한 substring 검사("t=00:05" in line)로는 이 버그를 못 잡는다.
     assert all(l.endswith("t=00:05") for l in lines)
+
+
+def test_extract_frames_parallel_preserves_input_order(synth_clip, tmp_path):
+    """병렬화 불변식: 반환 리스트는 입력 타임스탬프 순서를 그대로 따라야 한다
+    (dedup_frames의 ref 체인 비교가 순서에 의존한다)."""
+    ts = [1.0, 2.0, 3.0, 5.5, 8.0, 9.0]
+    out = frames.extract_frames(synth_clip, ts, 512, tmp_path)
+    assert [p.name for p in out] == [
+        "t0001_512.jpg", "t0002_512.jpg", "t0003_512.jpg",
+        "t0005d5_512.jpg", "t0008_512.jpg", "t0009_512.jpg",
+    ]
+
+
+def test_extract_frames_duplicate_timestamp_listed_twice_extracted_once(synth_clip, tmp_path):
+    """직렬 시절 의미 보존: 같은 타임스탬프가 두 번 오면 결과 리스트에도 두 번 나타난다.
+    병렬화 후에는 같은 출력 파일에 두 워커가 동시에 쓰지 않도록 추출 자체는 1회여야
+    한다 (파일 파손 방지) — 결과 리스트 의미는 그대로."""
+    out = frames.extract_frames(synth_clip, [1.0, 1.0], 512, tmp_path)
+    assert [p.name for p in out] == ["t0001_512.jpg", "t0001_512.jpg"]
