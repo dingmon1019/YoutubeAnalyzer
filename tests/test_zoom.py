@@ -85,3 +85,20 @@ def test_zoom_main_clamps_range_past_duration_without_crashing(synth_clip, tmp_p
 
     assert code == 0
     assert "clamped" in capsys.readouterr().out
+
+
+def test_timestamps_mode_skips_dedup(synth_clip, tmp_path, monkeypatch, capsys):
+    """파킹 1순위 결함의 회귀 테스트: 핀포인트(--timestamps)는 명시 요청 시점이므로
+    시각적 근접중복이라도 드롭하면 안 된다 — 1s/2s/3s(전부 파랑 정지)를 요청해도
+    3장 모두 유지돼야 한다. (--ranges 모드의 dedup은 test_dedup_drops_static이 보증)"""
+    cd = tmp_path / "abc12345678"
+    cd.mkdir()
+    (cd / "video.mp4").write_bytes(synth_clip.read_bytes())
+    monkeypatch.setattr(zoom.common, "CACHE_ROOT", tmp_path)
+    monkeypatch.setattr(zoom.sys, "argv", ["zoom.py", "abc12345678", "--timestamps", "0:01,0:02,0:03"])
+
+    code = zoom.main()
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "3 kept, 0 dup-dropped" in out

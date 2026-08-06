@@ -141,10 +141,14 @@ def main() -> int:
     for t, res in plan:
         by_res.setdefault(res, []).append(t)
     kept_all, dropped_all, failed_all = [], 0, 0
+    pinpoint = bool(args.timestamps)
     for res, ts in sorted(by_res.items()):
         raw = frames.extract_frames(video, ts, res, cd / "frames")
         failed_all += len(ts) - len(raw)
-        kept, dropped = frames.dedup_frames(raw)
+        if pinpoint:
+            kept, dropped = raw, 0    # 핀포인트는 명시 요청 시점 — 전량 반환 (스펙 D4)
+        else:
+            kept, dropped = frames.dedup_frames(raw)
         kept_all.extend(kept)
         dropped_all += dropped
     msg = (f"zoom: {len(kept_all)} kept, {dropped_all} dup-dropped, "
