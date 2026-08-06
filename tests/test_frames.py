@@ -90,3 +90,28 @@ def test_extract_frames_duplicate_timestamp_listed_twice_extracted_once(synth_cl
     한다 (파일 파손 방지) — 결과 리스트 의미는 그대로."""
     out = frames.extract_frames(synth_clip, [1.0, 1.0], 512, tmp_path)
     assert [p.name for p in out] == ["t0001_512.jpg", "t0001_512.jpg"]
+
+
+def test_extract_frames_near_duplicate_timestamps_sharing_tag_extracted_once(monkeypatch, tmp_path):
+    """리뷰 발견(Critical): dict.fromkeys(timestamps)는 float 값으로 dedup하지만 출력
+    파일명은 _frame_tag(t)의 데시초 양자화를 거친다 — 12.47과 12.5는 서로 다른 float지만
+    둘 다 "t0012d5"로 뭉개져 같은 출력 파일을 가리킨다. float dedup만으로는 이 충돌을
+    못 잡아 두 워커가 같은 경로에 동시에 "ffmpeg -y"를 실행하는 경합이 생기고, 직렬에서는
+    항상 먼저 나온 타임스탬프가 이기던 것이 병렬에서는 실행마다 다른 쪽이 이기는 비결정적
+    결과로 바뀐다. common.run을 모킹해 호출을 기록하고(부수효과로 출력 파일을 생성) 같은
+    출력 경로에 대해 ffmpeg 호출이 정확히 1회만 나가는지, 반환 리스트는 입력 타임스탬프
+    개수만큼(2개) 같은 파일을 가리키는지 확인한다."""
+    calls = []
+
+    def fake_run(cmd, **kw):
+        p = cmd[-1]
+        calls.append(cmd)
+        Path(p).write_bytes(b"fake")
+
+    monkeypatch.setattr(frames.common, "run", fake_run)
+    out = frames.extract_frames("video.mp4", [12.47, 12.5], 512, tmp_path)
+
+    assert [p.name for p in out] == ["t0012d5_512.jpg", "t0012d5_512.jpg"]
+    assert len(calls) == 1                     # 같은 출력 파일 -> ffmpeg 호출 1회만
+    assert calls[0][-1].name == "t0012d5_512.jpg"
+    assert calls[0][3] == "12.47"               # 태그 충돌 시 먼저 나온 타임스탬프가 이긴다 (직렬 의미 보존)

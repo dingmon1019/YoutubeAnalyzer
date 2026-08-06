@@ -43,14 +43,24 @@ def _extract_one(video, t: float, res: int, out_dir: Path):
 def extract_frames(video, timestamps: list, res: int, out_dir) -> list:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    # 실측 5.5초/장 직렬이 zoom 5.5분의 원인 — ffmpeg 호출을 병렬화한다. 같은 타임스탬프
-    # 중복은 한 번만 추출해(같은 출력 파일 동시 쓰기 방지) 결과 리스트에서 원래 순서·중복을
-    # 복원한다. ex.map은 입력 순서를 보존하므로 산출은 직렬과 결정적으로 동일하다.
-    unique = list(dict.fromkeys(timestamps))
+    # 실측 5.5초/장 직렬이 zoom 5.5분의 원인 — ffmpeg 호출을 병렬화한다. 중복 제거는
+    # float 값이 아니라 _frame_tag(t) 출력 파일명 기준이어야 한다 — _frame_tag는 초를
+    # 데시초로 양자화하므로 서로 다른 float(예: 12.47, 12.5)가 같은 태그 "t0012d5"로
+    # 뭉개져 같은 출력 파일을 가리킬 수 있다. float로만 dedup하면 이 둘이 별개 워커로
+    # 동시에 같은 경로에 "ffmpeg -y"를 실행해 파일 쓰기가 경합하고, 직렬에서는 항상
+    # 먼저 나온 타임스탬프가 이기던 것(p.exists() 검사가 두 번째를 건너뜀)이 병렬에서는
+    # 실행마다 다른 쪽이 이기는 비결정적 결과로 바뀐다. 태그별 첫 타임스탬프만 대표로
+    # 골라 추출하면(파일당 워커 1개) 결과 리스트에서 원래 순서·중복을 복원해도 직렬과
+    # 산출이 결정적으로 동일하다.
+    first: dict = {}                       # tag -> first timestamp with that tag
+    for t in timestamps:
+        first.setdefault(_frame_tag(t), t)
+    unique = list(first.values())
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         results = dict(zip(unique, ex.map(
             lambda t: _extract_one(video, t, res, out_dir), unique)))
-    return [results[t] for t in timestamps if results[t] is not None]
+    return [results[first[_frame_tag(t)]] for t in timestamps
+            if results[first[_frame_tag(t)]] is not None]
 
 
 _thumb_cache: dict = {}
