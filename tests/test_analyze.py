@@ -281,3 +281,55 @@ def test_lru_evict_removes_oldest_video_only(tmp_path, monkeypatch):
     assert evicted == ["aaaaaaaaaaa"]
     assert not (tmp_path / "aaaaaaaaaaa" / "video.mp4").exists()
     assert (tmp_path / "aaaaaaaaaaa" / "guide.md").exists()   # 가이드는 보존
+
+
+def test_signals_reused_when_fresh(tmp_path, monkeypatch):
+    """signals.json이 video.mp4보다 새로우면 활동곡선(전체 영상 디코드) 재계산 없이
+    재사용해야 한다 — 캐시 히트 재실행 102초의 원인 제거."""
+    import os
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"v")
+    sigf = tmp_path / "signals.json"
+    sigf.write_text('{"activity": {"curve": [], "peaks": []}, "flags": ["reused"]}', encoding="utf-8")
+    os.utime(video, (1000, 1000))
+    os.utime(sigf, (2000, 2000))
+
+    def boom(*a, **k):
+        raise AssertionError("build_signals가 호출되면 안 된다")
+
+    monkeypatch.setattr(analyze.sig_mod, "build_signals", boom)
+    sig = analyze._load_or_build_signals(tmp_path, {}, "vid")
+    assert sig["flags"] == ["reused"]
+
+
+def test_signals_rebuilt_when_video_newer(tmp_path, monkeypatch):
+    """video.mp4가 더 새로우면(eviction 후 재다운로드) 재계산하고 파일을 갱신해야 한다."""
+    import json
+    import os
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"v")
+    sigf = tmp_path / "signals.json"
+    sigf.write_text('{"activity": {"curve": [], "peaks": []}, "flags": ["stale"]}', encoding="utf-8")
+    os.utime(sigf, (1000, 1000))
+    os.utime(video, (2000, 2000))
+
+    fresh = {"activity": {"curve": [], "peaks": []}, "flags": ["fresh"]}
+    monkeypatch.setattr(analyze.sig_mod, "build_signals", lambda *a: fresh)
+    sig = analyze._load_or_build_signals(tmp_path, {}, "vid")
+    assert sig["flags"] == ["fresh"]
+    assert json.loads(sigf.read_text(encoding="utf-8"))["flags"] == ["fresh"]
+
+
+def test_signals_rebuilt_when_corrupt(tmp_path, monkeypatch):
+    """mtime이 새로워도 파손·비정형 JSON이면 재계산한다."""
+    import os
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"v")
+    sigf = tmp_path / "signals.json"
+    sigf.write_text("{broken", encoding="utf-8")
+    os.utime(video, (1000, 1000))
+    os.utime(sigf, (2000, 2000))
+
+    fresh = {"activity": {"curve": [], "peaks": []}, "flags": []}
+    monkeypatch.setattr(analyze.sig_mod, "build_signals", lambda *a: fresh)
+    assert analyze._load_or_build_signals(tmp_path, {}, "vid") == fresh

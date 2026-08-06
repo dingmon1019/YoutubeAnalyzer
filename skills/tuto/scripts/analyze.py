@@ -202,13 +202,31 @@ def cleanup() -> None:
     print(f"cache: removed {total / 1e6:.0f} MB total")
 
 
+def _load_or_build_signals(cd: Path, info: dict, vid: str) -> dict:
+    """signals.json이 video.mp4보다 새로우면 재사용한다 — build_signals의 활동곡선이
+    전체 영상을 디코드해 캐시 히트 재실행도 ~100초를 쓰던 것을 없앤다(스펙 D5).
+    eviction 후 재다운로드는 video.mp4 mtime이 새로워져 자동 무효화. 파손·비정형
+    파일은 재계산한다."""
+    sig_f = cd / "signals.json"
+    video_f = cd / "video.mp4"
+    if sig_f.exists() and video_f.exists() and sig_f.stat().st_mtime >= video_f.stat().st_mtime:
+        try:
+            sig = json.loads(sig_f.read_text(encoding="utf-8"))
+            if isinstance(sig, dict) and "activity" in sig and "flags" in sig:
+                return sig
+        except (json.JSONDecodeError, OSError):
+            pass
+    sig = sig_mod.build_signals(info, vid, video_f)
+    sig_f.write_text(json.dumps(sig, ensure_ascii=False, indent=1), encoding="utf-8")
+    return sig
+
+
 def run_pass1(url: str) -> int:
     vid = common.video_id_from_url(url)
     cd = common.cache_dir(vid)
     info = download(url, cd)
     duration = float(info.get("duration") or 0)
-    sig = sig_mod.build_signals(info, vid, cd / "video.mp4")
-    (cd / "signals.json").write_text(json.dumps(sig, ensure_ascii=False, indent=1), encoding="utf-8")
+    sig = _load_or_build_signals(cd, info, vid)
     tr = transcribe.get_transcript(cd, mode="auto")
 
     kept, dropped = extract_map_frames(cd / "video.mp4", duration, sig, cd / "frames")
