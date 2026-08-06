@@ -141,7 +141,7 @@ def main() -> int:
     for t, res in plan:
         by_res.setdefault(res, []).append(t)
     kept_all, dropped_all, failed_all = [], 0, 0
-    pinpoint = bool(args.timestamps)
+    pinpoint = bool(args.timestamps) and not args.ranges
     for res, ts in sorted(by_res.items()):
         raw = frames.extract_frames(video, ts, res, cd / "frames")
         failed_all += len(ts) - len(raw)
