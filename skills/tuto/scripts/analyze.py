@@ -258,8 +258,7 @@ def run_pass1(url: str) -> int:
 
 
 def main() -> int:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(errors="replace")  # Windows cp949 콘솔에서 em-dash 등 크래시 방지
+    common.utf8_stdout()
     ap = argparse.ArgumentParser()
     ap.add_argument("url", nargs="?")
     ap.add_argument("--cleanup", action="store_true")

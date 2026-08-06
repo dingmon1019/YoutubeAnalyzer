@@ -1,6 +1,7 @@
 """yta 공용 유틸: 설정·캐시 경로·시간 파싱·subprocess. 스크립트 간 유일한 공유 모듈."""
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 CACHE_ROOT = Path.home() / ".yta" / "cache"
@@ -67,3 +68,16 @@ def run(cmd: list, timeout: int = 600) -> subprocess.CompletedProcess:
             f"command failed ({p.returncode}): {' '.join(str(c) for c in cmd)}\n{p.stderr[-2000:]}"
         )
     return p
+
+
+def utf8_stdout() -> None:
+    """stdout/stderr를 UTF-8로 강제한다. Windows에서 파이프로 실행되면 기본 인코딩이
+    로케일(cp949)이라 한글·em-dash가 깨진 바이트로 나간다 — errors만 바꾸는 것으로는
+    부족하고(과거 결함) encoding까지 지정해야 한다. reconfigure 미지원 스트림(테스트
+    캡처 등)은 조용히 무시한다."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass

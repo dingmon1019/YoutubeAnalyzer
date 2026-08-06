@@ -280,8 +280,7 @@ def get_transcript(cache_dir: Path, mode: str = "auto") -> dict:
 
 
 def main() -> int:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(errors="replace")  # Windows cp949 콘솔에서 em-dash 등 크래시 방지
+    common.utf8_stdout()
     ap = argparse.ArgumentParser()
     ap.add_argument("cache_dir")
     ap.add_argument("--whisper", choices=["groq", "local"], default=None)

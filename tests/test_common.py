@@ -48,3 +48,27 @@ def test_load_config_strips_bom(tmp_path, monkeypatch):
     f.write_text("GROQ_API_KEY=abc\n", encoding="utf-8-sig")
     monkeypatch.setattr(common, "CONFIG_FILE", f)
     assert common.load_config().get("GROQ_API_KEY") == "abc"
+
+
+def test_utf8_stdout_forces_utf8_on_pipe():
+    """Windows 파이프에서 stdout이 로케일(cp949)로 인코딩되던 결함의 회귀 테스트 —
+    PYTHONUTF8/PYTHONIOENCODING 없이 서브프로세스로 실행해 실제 파이프 환경을 재현한다."""
+    import os
+    import subprocess
+    scripts = Path(__file__).parent.parent / "skills" / "tuto" / "scripts"
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    code = (
+        f"import sys; sys.path.insert(0, r'{scripts}'); "
+        "import common; common.utf8_stdout(); print('한—글')"
+    )
+    p = subprocess.run([sys.executable, "-c", code], capture_output=True, env=env)
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.decode("utf-8").strip() == "한—글"
+
+
+def test_utf8_stdout_ignores_streams_without_reconfigure(monkeypatch):
+    """capsys/StringIO처럼 reconfigure가 없는 스트림에서도 예외 없이 통과해야 한다."""
+    import io
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    monkeypatch.setattr(sys, "stderr", io.StringIO())
+    common.utf8_stdout()

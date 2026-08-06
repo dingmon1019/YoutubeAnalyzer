@@ -129,6 +129,7 @@ def build_signals(info: dict, video_id: str, video_path, curve=None) -> dict:
 
 
 def main() -> int:
+    common.utf8_stdout()
     ap = argparse.ArgumentParser()
     ap.add_argument("cache_dir")
     args = ap.parse_args()

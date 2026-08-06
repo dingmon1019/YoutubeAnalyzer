@@ -47,6 +47,7 @@ def check_env() -> dict:
 
 
 def main() -> int:
+    common.utf8_stdout()
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--json", action="store_true")

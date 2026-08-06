@@ -88,6 +88,7 @@ def report(paths: list) -> None:
 
 
 def main() -> int:
+    common.utf8_stdout()
     ap = argparse.ArgumentParser()
     ap.add_argument("video")
     ap.add_argument("--timestamps", required=True, help="쉼표구분 초/MM:SS")
