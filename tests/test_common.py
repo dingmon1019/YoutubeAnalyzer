@@ -72,3 +72,12 @@ def test_utf8_stdout_ignores_streams_without_reconfigure(monkeypatch):
     monkeypatch.setattr(sys, "stdout", io.StringIO())
     monkeypatch.setattr(sys, "stderr", io.StringIO())
     common.utf8_stdout()
+
+
+def test_frame_label_parses_tag_variants():
+    """frames.report의 태그 파싱을 공용 헬퍼로 승격 — ocr.py(OCRTXT 라인)와 공유하기 위함.
+    데시초 접미사(d5)·크롭 접미사(c...)는 라벨에서 제거되고 초 단위 MM:SS만 남는다."""
+    assert common.frame_label(Path("t0312_512.jpg")) == "03:12"
+    assert common.frame_label(Path("t0312d5_1024.jpg")) == "03:12"
+    assert common.frame_label(Path("t10312_512.jpg")) == "1:03:12"
+    assert common.frame_label(Path("t0618d4c10_200_400_120_1024.jpg")) == "06:18"

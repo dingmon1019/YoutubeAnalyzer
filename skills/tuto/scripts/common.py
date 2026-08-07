@@ -70,6 +70,20 @@ def run(cmd: list, timeout: int = 600) -> subprocess.CompletedProcess:
     return p
 
 
+def frame_label(path) -> str:
+    """프레임 파일명(t0312_512.jpg / t0312d5_1024.jpg / t0618d4c...jpg)에서 t=MM:SS 라벨을
+    복원한다. frames.report와 ocr.report가 공유 — 파싱 규칙이 두 곳에서 어긋나지 않게 한다.
+    구 frames.report()는 p.name만 참조하고 Path(p)로 재구성하지 않았다 — 테스트 더블(예:
+    test_zoom.py의 name 속성만 있는 mock 객체)이 그 경로를 타므로, 이미 .name이 있으면
+    그대로 쓰고 없을 때만 Path()로 감싸 하위 호환을 유지한다."""
+    name = path.name if hasattr(path, "name") else Path(path).name
+    tag = name.split("_")[0][1:]                # t0312d5 → 0312d5
+    tag = tag.split("d")[0].split("c")[0]       # 데시초·크롭 접미사 제거
+    if len(tag) <= 4:
+        return tag[:-2] + ":" + tag[-2:]
+    return tag[:-4] + ":" + tag[-4:-2] + ":" + tag[-2:]
+
+
 def utf8_stdout() -> None:
     """stdout/stderr를 UTF-8로 강제한다. Windows에서 파이프로 실행되면 기본 인코딩이
     로케일(cp949)이라 한글·em-dash가 깨진 바이트로 나간다 — errors만 바꾸는 것으로는

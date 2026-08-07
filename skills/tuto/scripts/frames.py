@@ -107,10 +107,7 @@ def dedup_frames(paths: list, threshold: float = 2.0) -> tuple:
 
 def report(paths: list) -> None:
     for p in paths:
-        tag = p.name.split("_")[0][1:]          # t0312 → 0312 / t0312d5 → 0312d5
-        tag = tag.split("d")[0]                  # 데시초 접미사 제거 — t=MM:SS는 초 단위로만 표시
-        mmss = tag[:-2] + ":" + tag[-2:] if len(tag) <= 4 else tag[:-4] + ":" + tag[-4:-2] + ":" + tag[-2:]
-        print(f"FRAME {p} t={mmss}")
+        print(f"FRAME {p} t={common.frame_label(p)}")
 
 
 def main() -> int:
