@@ -27,3 +27,12 @@ def synth_clip(tmp_path_factory):
         check=True, capture_output=True,
     )
     return out
+
+
+@pytest.fixture(autouse=True)
+def _stub_ocr_extract(monkeypatch):
+    """테스트는 기본적으로 실 OCR 서브프로세스를 부르지 않는다 — zoom/analyze에
+    ocr.report가 배선되면서 기존 추출 테스트가 조용히 실 winocr 호출을 하게 된
+    회귀의 차단막. OCRTXT 동작을 검증하는 테스트는 자체 monkeypatch로 이 스텁을 덮는다."""
+    import ocr
+    monkeypatch.setattr(ocr, "extract_batch", lambda paths: {})
