@@ -2,6 +2,7 @@ param([string]$ImagePath, [string]$Lang = "ko", [switch]$Probe)
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]
+$null = [Windows.Globalization.Language, Windows.Globalization, ContentType = WindowsRuntime]
 $lang = New-Object Windows.Globalization.Language $Lang
 if (-not [Windows.Media.Ocr.OcrEngine]::IsLanguageSupported($lang)) { exit 3 }
 if ($Probe) { exit 0 }
