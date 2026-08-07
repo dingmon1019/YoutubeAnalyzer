@@ -333,11 +333,3 @@ def test_signals_rebuilt_when_corrupt(tmp_path, monkeypatch):
     fresh = {"activity": {"curve": [], "peaks": []}, "flags": []}
     monkeypatch.setattr(analyze.sig_mod, "build_signals", lambda *a: fresh)
     assert analyze._load_or_build_signals(tmp_path, {}, "vid") == fresh
-
-
-def test_status_flags_include_ocr_absent_when_no_engine(monkeypatch, capsys):
-    """OCR 비활성은 조용히 넘기지 않는다 — STATUS flags에 ocr_absent 명시 (스펙 Q2)."""
-    monkeypatch.setattr(analyze.ocr, "detect_engine", lambda: "")
-    assert analyze._ocr_flags() == ["ocr_absent"]
-    monkeypatch.setattr(analyze.ocr, "detect_engine", lambda: "winocr")
-    assert analyze._ocr_flags() == []

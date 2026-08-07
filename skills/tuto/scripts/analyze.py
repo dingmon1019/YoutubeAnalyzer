@@ -7,7 +7,6 @@ from pathlib import Path
 
 import common
 import frames
-import ocr
 import signals as sig_mod
 import transcribe
 
@@ -222,10 +221,6 @@ def _load_or_build_signals(cd: Path, info: dict, vid: str) -> dict:
     return sig
 
 
-def _ocr_flags() -> list:
-    return [] if ocr.detect_engine() else ["ocr_absent"]
-
-
 def run_pass1(url: str) -> int:
     vid = common.video_id_from_url(url)
     cd = common.cache_dir(vid)
@@ -244,7 +239,7 @@ def run_pass1(url: str) -> int:
         f"heatmap={'yes' if sig['heatmap'] else 'no'} chapters={len(sig['chapters'])} "
         f"desc_ts={len(sig['desc_timestamps'])} sponsorblock={len(sig['sponsorblock'])}segs "
         f"activity={len(sig['activity']['curve'])}pts/{len(sig['activity']['peaks'])}peaks "
-        f"map_frames={len(kept)}({dropped} dup-dropped) flags={(sig['flags'] + tr['flags'] + _ocr_flags()) or 'none'}"
+        f"map_frames={len(kept)}({dropped} dup-dropped) flags={(sig['flags'] + tr['flags']) or 'none'}"
     )
     print("== TRANSCRIPT ==")
     for s in tr["segments"]:
@@ -265,7 +260,6 @@ def run_pass1(url: str) -> int:
     print(", ".join(common.fmt_ts(p) for p in sig["activity"]["peaks"]) or "(none)")
     print("== FRAMES ==")
     frames.report(kept)
-    ocr.report(kept)
     print(f"== CACHE == {cd}")
     if duration > 1860:
         print("WARNING: video exceeds 30min design target — map is sparse; consider --ranges zoom on a section")

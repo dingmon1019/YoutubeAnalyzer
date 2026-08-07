@@ -6,7 +6,6 @@ from pathlib import Path
 
 import common
 import frames
-import ocr
 
 RANGE_CAP = 20
 GLOBAL_CAP = 60
@@ -150,7 +149,6 @@ def main() -> int:
             out_paths.append(dst)
         print(f"zoom: {len(out_paths)} cropped")
         frames.report(out_paths)
-        ocr.report(out_paths)
         return 0
 
     video = cd / "video.mp4"
@@ -188,7 +186,6 @@ def main() -> int:
         msg += f", {failed_all} failed"
     print(msg)
     frames.report(sorted(kept_all, key=lambda p: p.name))
-    ocr.report(sorted(kept_all, key=lambda p: p.name))
     return 0
 
 

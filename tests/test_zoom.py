@@ -133,20 +133,6 @@ def test_ranges_with_timestamps_argument_still_dedups(tmp_path, monkeypatch, cap
     assert 'dup-dropped' in out
 
 
-def test_zoom_report_emits_ocrtxt_after_frames(synth_clip, tmp_path, monkeypatch, capsys):
-    """zoom 보고서 계약: FRAME 라인 뒤에 OCRTXT 라인 — 판독 텍스트가 판정자에게 전달된다."""
-    cd = tmp_path / "abc12345678"
-    cd.mkdir()
-    (cd / "video.mp4").write_bytes(synth_clip.read_bytes())
-    monkeypatch.setattr(zoom.common, "CACHE_ROOT", tmp_path)
-    monkeypatch.setattr(zoom.ocr, "extract_batch",
-                        lambda paths: {p: "파랑 화면" for p in paths})
-    monkeypatch.setattr(zoom.sys, "argv", ["zoom.py", "abc12345678", "--timestamps", "0:01"])
-    assert zoom.main() == 0
-    out = capsys.readouterr().out
-    assert out.index("FRAME ") < out.index("OCRTXT t=00:01: 파랑 화면")
-
-
 def test_crop_mode_crops_existing_frame_without_video(synth_clip, tmp_path, monkeypatch, capsys):
     """크롭 모드: 기존 프레임에서 ffmpeg crop — video.mp4가 없어도(eviction 후) 동작해야 한다."""
     cd = tmp_path / "abc12345678"

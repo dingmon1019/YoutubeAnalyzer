@@ -67,10 +67,6 @@ def main() -> int:
                     f"update recommended: pip install -U yt-dlp",
                     file=sys.stderr,
                 )
-            import ocr
-            if not ocr.detect_engine():
-                print("NOTE: OCR 엔진 없음 — Windows OCR ko팩 또는 tesseract(+kor) 설치 시 "
-                      "잔글씨 판독(OCRTXT)이 활성화됩니다", file=sys.stderr)
             return 0
         print("MISSING: " + ", ".join(r["missing"]), file=sys.stderr)
         print("install: winget install Gyan.FFmpeg ; pip install -U yt-dlp", file=sys.stderr)
