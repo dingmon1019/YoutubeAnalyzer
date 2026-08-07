@@ -1,5 +1,6 @@
 """패스 2 확대·검증 재확대·Q&A 재확대. 확대 예산 가드 소유. §3.3/§4."""
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -121,8 +122,32 @@ def main() -> int:
     ap.add_argument("target", help="video_id 또는 캐시 경로")
     ap.add_argument("--ranges")
     ap.add_argument("--timestamps")
+    ap.add_argument("--crop", help='기존 프레임 크롭: "<frames/파일명>@x,y,w,h" 쉼표구분 다중')
     args = ap.parse_args()
     cd = Path(args.target) if Path(args.target).exists() else common.CACHE_ROOT / args.target
+
+    if args.crop:
+        # 재확대를 영상 재추출 대신 기존 프레임 크롭으로 (스펙 R2 Q3) — 재디코드가 없어
+        # 빠르고 더 선명하며, video.mp4가 evict된 뒤에도 동작한다.
+        out_paths = []
+        # 패턴: filename@x,y,w,h (여러 개일 수 있으므로 정규식으로 파싱)
+        for match in re.finditer(r'(\S+?)@(\d+),(\d+),(\d+),(\d+)', args.crop):
+            name, x_str, y_str, w_str, h_str = match.groups()
+            src = cd / "frames" / name
+            if not src.exists():
+                print(f"ERROR: 크롭 원본 없음: {src}", file=sys.stderr)
+                return 1
+            x, y, w, h = int(x_str), int(y_str), int(w_str), int(h_str)
+            dst = src.with_name(f"{src.stem}c{x}_{y}_{w}_{h}.jpg")
+            if not dst.exists():
+                common.run(["ffmpeg", "-y", "-i", src, "-vf",
+                            f"crop={w}:{h}:{x}:{y}", "-q:v", "3", dst])
+            out_paths.append(dst)
+        print(f"zoom: {len(out_paths)} cropped")
+        frames.report(out_paths)
+        ocr.report(out_paths)
+        return 0
+
     video = cd / "video.mp4"
     if not video.exists():
         print(f"ERROR: video.mp4 evicted — re-run analyze.py <url> to re-download ({cd})")

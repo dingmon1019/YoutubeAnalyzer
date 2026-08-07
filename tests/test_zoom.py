@@ -1,4 +1,5 @@
 import sys
+import subprocess
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "tuto" / "scripts"))
@@ -144,3 +145,29 @@ def test_zoom_report_emits_ocrtxt_after_frames(synth_clip, tmp_path, monkeypatch
     assert zoom.main() == 0
     out = capsys.readouterr().out
     assert out.index("FRAME ") < out.index("OCRTXT t=00:01: 파랑 화면")
+
+
+def test_crop_mode_crops_existing_frame_without_video(synth_clip, tmp_path, monkeypatch, capsys):
+    """크롭 모드: 기존 프레임에서 ffmpeg crop — video.mp4가 없어도(eviction 후) 동작해야 한다."""
+    cd = tmp_path / "abc12345678"
+    (cd / "frames").mkdir(parents=True)
+    src = cd / "frames" / "t0618_1024.jpg"
+    subprocess.run(["ffmpeg", "-y", "-ss", "1", "-i", str(synth_clip),
+                    "-frames:v", "1", "-vf", "scale=1024:-2", str(src)],
+                   capture_output=True, check=True)
+    monkeypatch.setattr(zoom.common, "CACHE_ROOT", tmp_path)
+    monkeypatch.setattr(zoom.sys, "argv",
+                        ["zoom.py", "abc12345678", "--crop", "t0618_1024.jpg@100,50,300,200"])
+    assert zoom.main() == 0
+    out = capsys.readouterr().out
+    assert "t0618_1024c100_50_300_200.jpg" in out and "FRAME" in out
+
+
+def test_crop_mode_missing_source_fails_loud(tmp_path, monkeypatch, capsys):
+    cd = tmp_path / "abc12345678"
+    (cd / "frames").mkdir(parents=True)
+    monkeypatch.setattr(zoom.common, "CACHE_ROOT", tmp_path)
+    monkeypatch.setattr(zoom.sys, "argv",
+                        ["zoom.py", "abc12345678", "--crop", "없는파일.jpg@0,0,10,10"])
+    assert zoom.main() == 1
+    assert "ERROR" in capsys.readouterr().err
