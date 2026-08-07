@@ -77,7 +77,11 @@ def extract_text(path) -> str:
     eng = detect_engine()
     if not eng:
         return ""
-    text = _run_winocr(Path(path)) if eng == "winocr" else _run_tesseract(Path(path))
+    try:
+        p = Path(path)
+    except (TypeError, ValueError):
+        return ""
+    text = _run_winocr(p) if eng == "winocr" else _run_tesseract(p)
     text = " ".join(text.split())
     return text[:MAX_CHARS] + "…" if len(text) > MAX_CHARS else text
 
