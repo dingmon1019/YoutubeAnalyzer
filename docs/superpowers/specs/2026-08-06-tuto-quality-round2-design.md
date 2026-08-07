@@ -38,9 +38,17 @@ Mentor 오류분석: 볼드 텍스트 58.3%·글꼴색 변화 35.7% 누락 — �
 
 ### Q2. OCR-우선 판독 (setup.py·frames.py 또는 신규 ocr.py + SKILL.md §2)
 
-- setup: OCR 엔진 자동 검출 — **PaddleOCR(korean) 우선, Tesseract(kor) 폴백**. 둘 다
-  없으면 기능 비활성 + `--check` stderr NOTE와 analyze STATUS flags에 `ocr_absent`
-  명시(조용히 저하 금지). 사용자는 의존 추가를 허용함(2026-08-06 결정).
+- setup: OCR 엔진 자동 검출 — **3단 사다리** (2026-08-07 사용자 결정, 배포 풋프린트 근거):
+  1. **Windows 내장 OCR** (`Windows.Media.Ocr`, PowerShell 호출) — 추가 설치 0MB.
+     한국어 언어팩 존재를 검출 조건에 포함(PowerToys Text Extractor와 같은 엔진).
+  2. **Tesseract + kor.traineddata** (~100MB, `winget install tesseract` 원커맨드) —
+     내장 OCR 미가용(비Windows·팩 부재) 시. OCRmyPDF(⭐32k)·pytesseract가 쓰는
+     "시스템 바이너리 요구" 표준 관행이며 기존 ffmpeg·yt-dlp 패턴과 동일.
+  3. 둘 다 없으면 기능 비활성 + `--check` stderr NOTE와 analyze STATUS flags에
+     `ocr_absent` 명시(조용히 저하 금지).
+  - PaddleOCR은 스펙에서 제외 — 설치 풋프린트 수백MB~1GB로 배포 부담 과대.
+    **G2 전면 미달 시에만 재검토** 각주로 남긴다.
+  - G2 게이트는 **검출된 엔진 그대로** 심판한다 (내장 OCR이 검출되면 내장 OCR로 실측).
 - 추출 프레임의 OCR 텍스트를 산출해 보고서의 FRAME 라인 다음에
   `OCRTXT t=MM:SS: <정제 텍스트>` 로 출력. 프레임당 상한 300자(초과분 절단 표시).
   실패·저신뢰 프레임은 라인 생략(빈 값 출력 금지). 저신뢰 기준: 엔진 평균 confidence
@@ -106,8 +114,9 @@ Mentor 오류분석: 볼드 텍스트 58.3%·글꼴색 변화 35.7% 누락 — �
 
 | 리스크 | 방어·폴백 |
 |---|---|
-| 한국어 OCR 정확도 미달 | G2 게이트 → 동봉만으로 축소 |
-| OCR 엔진 미설치 환경 | 자동 비활성 + flags 명시(현행 동작과 동일하게 저하) |
+| 한국어 OCR 정확도 미달 | G2 게이트 → 동봉만으로 축소 (전면 미달 시에만 PaddleOCR 재검토) |
+| OCR 엔진 미설치 환경 | 3단 사다리 자동 강등 + flags 명시(현행 동작과 동일하게 저하) |
+| Windows 내장 OCR의 PowerShell 호출 취약성 | 호출 실패 시 Tesseract로 자동 강등, 테스트로 검출 분기 고정 |
 | 커버리지 감사가 자막 오류에 오염 | 누락 후보는 프레임 확인 후에만 보강, 불확실은 후보 기재 |
 | 자막 없는 영상 | 커버리지 감사 스킵 + 스탬프 명시 |
 | 골든셋 교정 지연 | 게이트 4는 영상 제공 시점부터 — 다른 게이트와 독립 진행 |
