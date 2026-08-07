@@ -1,5 +1,6 @@
 param([string]$ImagePath, [string]$Lang = "ko", [switch]$Probe)
 $ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]
 $match = [Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages |
