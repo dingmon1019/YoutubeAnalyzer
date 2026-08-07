@@ -11,6 +11,7 @@ import ocr
 RANGE_CAP = 20
 GLOBAL_CAP = 60
 MAX_FPS = 2.0
+_CROP_SPEC = re.compile(r"([^,@]+)@(\d+),(\d+),(\d+),(\d+)")
 
 
 def _parse_res(token: str):
@@ -129,15 +130,19 @@ def main() -> int:
     if args.crop:
         # 재확대를 영상 재추출 대신 기존 프레임 크롭으로 (스펙 R2 Q3) — 재디코드가 없어
         # 빠르고 더 선명하며, video.mp4가 evict된 뒤에도 동작한다.
+        specs = _CROP_SPEC.findall(args.crop)
+        leftover = _CROP_SPEC.sub("", args.crop).strip(",").strip()
+        if not specs or leftover:
+            print(f"ERROR: --crop 형식 오류: {args.crop!r} "
+                  f"(형식: 파일명@x,y,w,h[,파일명@x,y,w,h...])", file=sys.stderr)
+            return 1
         out_paths = []
-        # 패턴: filename@x,y,w,h (여러 개일 수 있으므로 정규식으로 파싱)
-        for match in re.finditer(r'(\S+?)@(\d+),(\d+),(\d+),(\d+)', args.crop):
-            name, x_str, y_str, w_str, h_str = match.groups()
+        for name, x, y, w, h in specs:
             src = cd / "frames" / name
             if not src.exists():
                 print(f"ERROR: 크롭 원본 없음: {src}", file=sys.stderr)
                 return 1
-            x, y, w, h = int(x_str), int(y_str), int(w_str), int(h_str)
+            x, y, w, h = int(x), int(y), int(w), int(h)
             dst = src.with_name(f"{src.stem}c{x}_{y}_{w}_{h}.jpg")
             if not dst.exists():
                 common.run(["ffmpeg", "-y", "-i", src, "-vf",

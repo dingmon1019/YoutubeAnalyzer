@@ -171,3 +171,38 @@ def test_crop_mode_missing_source_fails_loud(tmp_path, monkeypatch, capsys):
                         ["zoom.py", "abc12345678", "--crop", "없는파일.jpg@0,0,10,10"])
     assert zoom.main() == 1
     assert "ERROR" in capsys.readouterr().err
+
+
+def test_crop_mode_multi_spec_success(synth_clip, tmp_path, monkeypatch, capsys):
+    """다중 크롭 스펙: 쉼표로 구분된 여러 파일을 한 번에 크롭한다."""
+    cd = tmp_path / "abc12345678"
+    (cd / "frames").mkdir(parents=True)
+    # 첫 번째 프레임
+    src1 = cd / "frames" / "t0618_1024.jpg"
+    subprocess.run(["ffmpeg", "-y", "-ss", "1", "-i", str(synth_clip),
+                    "-frames:v", "1", "-vf", "scale=1024:-2", str(src1)],
+                   capture_output=True, check=True)
+    # 두 번째 프레임
+    src2 = cd / "frames" / "t1200_512.jpg"
+    subprocess.run(["ffmpeg", "-y", "-ss", "3", "-i", str(synth_clip),
+                    "-frames:v", "1", "-vf", "scale=512:-2", str(src2)],
+                   capture_output=True, check=True)
+    monkeypatch.setattr(zoom.common, "CACHE_ROOT", tmp_path)
+    monkeypatch.setattr(zoom.sys, "argv",
+                        ["zoom.py", "abc12345678", "--crop", "t0618_1024.jpg@100,50,300,200,t1200_512.jpg@10,10,40,40"])
+    assert zoom.main() == 0
+    out = capsys.readouterr().out
+    assert "2 cropped" in out
+    assert "t0618_1024c100_50_300_200.jpg" in out
+    assert "t1200_512c10_10_40_40.jpg" in out
+
+
+def test_crop_mode_malformed_input_fails_loud(tmp_path, monkeypatch, capsys):
+    """형식 오류: 잘못된 --crop 형식(comma 개수 오류 등)은 exit 1 + stderr ERROR."""
+    cd = tmp_path / "abc12345678"
+    (cd / "frames").mkdir(parents=True)
+    monkeypatch.setattr(zoom.common, "CACHE_ROOT", tmp_path)
+    monkeypatch.setattr(zoom.sys, "argv",
+                        ["zoom.py", "abc12345678", "--crop", "t0618_1024.jpg@abc"])
+    assert zoom.main() == 1
+    assert "ERROR" in capsys.readouterr().err
