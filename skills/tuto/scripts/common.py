@@ -71,7 +71,7 @@ def run(cmd: list, timeout: int = 600) -> subprocess.CompletedProcess:
 
 
 def frame_label(path) -> str:
-    """프레임 파일명(t0312_512.jpg / t0312d5_1024.jpg / t0618d4c...jpg)에서 t=MM:SS 라벨을
+    """프레임 파일명(t0312_512.jpg / t0312d5_1024.jpg / t0618d4_1024c10_200_400_120.jpg)에서 t=MM:SS 라벨을
     복원한다. frames.report가 쓰는 공용 헬퍼 — 크롭 파일명(c 접미사) 포함 파싱 규칙을 한
     곳에 둔다. 구 frames.report()는 p.name만 참조하고 Path(p)로 재구성하지 않았다 — 테스트 더블(예:
     test_zoom.py의 name 속성만 있는 mock 객체)이 그 경로를 타므로, 이미 .name이 있으면

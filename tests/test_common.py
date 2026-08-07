@@ -80,4 +80,4 @@ def test_frame_label_parses_tag_variants():
     assert common.frame_label(Path("t0312_512.jpg")) == "03:12"
     assert common.frame_label(Path("t0312d5_1024.jpg")) == "03:12"
     assert common.frame_label(Path("t10312_512.jpg")) == "1:03:12"
-    assert common.frame_label(Path("t0618d4c10_200_400_120_1024.jpg")) == "06:18"
+    assert common.frame_label(Path("t0618d4_1024c10_200_400_120.jpg")) == "06:18"
