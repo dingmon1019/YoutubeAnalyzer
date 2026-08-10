@@ -202,7 +202,8 @@ def test_crop_mode_caps_at_five_specs(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(zoom.common, "CACHE_ROOT", tmp_path)
     monkeypatch.setattr(zoom.sys, "argv", ["zoom.py", "abc12345678", "--crop", specs])
     assert zoom.main() == 1
-    assert "ERROR" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "5회" in err
 
 
 def test_crop_mode_ffmpeg_failure_fails_loud_and_removes_partial(synth_clip, tmp_path, monkeypatch, capsys):
