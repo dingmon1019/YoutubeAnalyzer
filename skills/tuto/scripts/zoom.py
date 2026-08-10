@@ -127,13 +127,17 @@ def main() -> int:
     cd = Path(args.target) if Path(args.target).exists() else common.CACHE_ROOT / args.target
 
     if args.crop:
-        # 재확대를 영상 재추출 대신 기존 프레임 크롭으로 (스펙 R2 Q3) — 재디코드가 없어
-        # 빠르고 더 선명하며, video.mp4가 evict된 뒤에도 동작한다.
+        if args.ranges or args.timestamps:
+            print("NOTE: --crop 지정 시 --ranges/--timestamps는 무시됩니다", file=sys.stderr)
         specs = _CROP_SPEC.findall(args.crop)
         leftover = _CROP_SPEC.sub("", args.crop).strip(",").strip()
         if not specs or leftover:
             print(f"ERROR: --crop 형식 오류: {args.crop!r} "
                   f"(형식: 파일명@x,y,w,h[,파일명@x,y,w,h...])", file=sys.stderr)
+            return 1
+        if len(specs) > 5:
+            print(f"ERROR: --crop 스펙 {len(specs)}건 — 영상당 5회 이내로 제한"
+                  f" (SKILL.md 검증 규칙)", file=sys.stderr)
             return 1
         out_paths = []
         for name, x, y, w, h in specs:
@@ -144,8 +148,13 @@ def main() -> int:
             x, y, w, h = int(x), int(y), int(w), int(h)
             dst = src.with_name(f"{src.stem}c{x}_{y}_{w}_{h}.jpg")
             if not dst.exists():
-                common.run(["ffmpeg", "-y", "-i", src, "-vf",
-                            f"crop={w}:{h}:{x}:{y}", "-q:v", "3", dst])
+                try:
+                    common.run(["ffmpeg", "-y", "-i", src, "-vf",
+                                f"crop={w}:{h}:{x}:{y}", "-q:v", "3", dst])
+                except RuntimeError as e:
+                    dst.unlink(missing_ok=True)      # 부분 파일 영구 재사용 방지
+                    print(f"ERROR: 크롭 실패: {name} — {e}", file=sys.stderr)
+                    return 1
             out_paths.append(dst)
         print(f"zoom: {len(out_paths)} cropped")
         frames.report(out_paths)

@@ -192,3 +192,54 @@ def test_crop_mode_malformed_input_fails_loud(tmp_path, monkeypatch, capsys):
                         ["zoom.py", "abc12345678", "--crop", "t0618_1024.jpg@abc"])
     assert zoom.main() == 1
     assert "ERROR" in capsys.readouterr().err
+
+
+def test_crop_mode_caps_at_five_specs(tmp_path, monkeypatch, capsys):
+    """SKILL.md의 '영상당 크롭 ≤5회' 산문 상한을 코드로 배선 — 6건 이상이면 fail-loud."""
+    cd = tmp_path / "abc12345678"
+    (cd / "frames").mkdir(parents=True)
+    specs = ",".join(f"f{i}.jpg@0,0,10,10" for i in range(6))
+    monkeypatch.setattr(zoom.common, "CACHE_ROOT", tmp_path)
+    monkeypatch.setattr(zoom.sys, "argv", ["zoom.py", "abc12345678", "--crop", specs])
+    assert zoom.main() == 1
+    assert "ERROR" in capsys.readouterr().err
+
+
+def test_crop_mode_ffmpeg_failure_fails_loud_and_removes_partial(synth_clip, tmp_path, monkeypatch, capsys):
+    """크롭 ffmpeg 실패는 traceback이 아니라 평문 ERROR — 부분 파일도 남기지 않는다."""
+    cd = tmp_path / "abc12345678"
+    (cd / "frames").mkdir(parents=True)
+    src = cd / "frames" / "t0001_512.jpg"
+    subprocess.run(["ffmpeg", "-y", "-ss", "1", "-i", str(synth_clip),
+                    "-frames:v", "1", "-vf", "scale=512:-2", str(src)],
+                   capture_output=True, check=True)
+
+    def boom(cmd, timeout=600):
+        dst = Path(str(cmd[-1]))
+        dst.write_bytes(b"partial")          # ffmpeg가 부분 파일을 남긴 상황 재현
+        raise RuntimeError("ffmpeg failed")
+
+    monkeypatch.setattr(zoom.common, "run", boom)
+    monkeypatch.setattr(zoom.common, "CACHE_ROOT", tmp_path)
+    monkeypatch.setattr(zoom.sys, "argv",
+                        ["zoom.py", "abc12345678", "--crop", "t0001_512.jpg@0,0,10,10"])
+    assert zoom.main() == 1
+    assert "ERROR" in capsys.readouterr().err
+    assert not (cd / "frames" / "t0001_512c0_0_10_10.jpg").exists()
+
+
+def test_crop_with_ranges_prints_note(synth_clip, tmp_path, monkeypatch, capsys):
+    """--crop과 --ranges 동시 지정은 무언 무시 대신 stderr NOTE — fail-loud 관례."""
+    cd = tmp_path / "abc12345678"
+    (cd / "frames").mkdir(parents=True)
+    src = cd / "frames" / "t0001_512.jpg"
+    subprocess.run(["ffmpeg", "-y", "-ss", "1", "-i", str(synth_clip),
+                    "-frames:v", "1", "-vf", "scale=512:-2", str(src)],
+                   capture_output=True, check=True)
+    monkeypatch.setattr(zoom.common, "CACHE_ROOT", tmp_path)
+    monkeypatch.setattr(zoom.sys, "argv",
+                        ["zoom.py", "abc12345678", "--crop", "t0001_512.jpg@0,0,50,50",
+                         "--ranges", "0:01-0:05"])
+    assert zoom.main() == 0
+    err = capsys.readouterr().err
+    assert "NOTE" in err and "--crop" in err
