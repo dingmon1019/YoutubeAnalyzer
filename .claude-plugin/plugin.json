@@ -15,5 +15,6 @@
     "transcript",
     "frame-extraction",
     "verification"
-  ]
+  ],
+  "license": "MIT"
 }

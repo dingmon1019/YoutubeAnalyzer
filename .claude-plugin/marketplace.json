@@ -21,7 +21,8 @@
         "tutorial",
         "video-analysis",
         "step-by-step-guide"
-      ]
+      ],
+      "license": "MIT"
     }
   ]
 }
