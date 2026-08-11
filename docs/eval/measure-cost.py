@@ -91,6 +91,7 @@ def to_epoch(ts):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--marker", help="실행을 식별할 사용자 발화 내 문자열 (보통 video_id)")
+    ap.add_argument("--since", help="구간 시작 ISO 타임스탬프 (--marker 대신 직접 지정)")
     ap.add_argument("--session", help="세션 id (생략 시 마커를 포함한 가장 최근 세션)")
     ap.add_argument("--project", default=None, help="프로젝트 디렉토리명 (생략 시 cwd에서 추론)")
     ap.add_argument("--until", help="구간 끝 ISO 타임스탬프 (생략 시 파일 끝 — 사후 작업이 함께 잡힌다)")
@@ -113,28 +114,34 @@ def main():
             mt = datetime.datetime.fromtimestamp(os.path.getmtime(s))
             print(f"{os.path.basename(s)[:-6]}  {os.path.getsize(s)/1e6:8.1f}MB  {mt:%Y-%m-%d %H:%M}")
         return
-    if not args.marker:
-        sys.exit("--marker 또는 --list 가 필요하다")
+    if not args.marker and not args.since:
+        sys.exit("--marker, --since, --list 중 하나가 필요하다")
 
     target = None
     if args.session:
         target = os.path.join(base, args.session + ".jsonl")
-    else:
+    elif args.marker:
         for s in sessions:
             if user_marks(s, args.marker):
                 target = s
                 break
+    else:
+        target = sessions[0]
     if not target or not os.path.exists(target):
-        sys.exit(f"마커 '{args.marker}'를 포함한 세션을 찾지 못했다")
+        sys.exit(f"세션을 찾지 못했다 (marker={args.marker}, session={args.session})")
 
     sid = os.path.basename(target)[:-6]
-    marks = user_marks(target, args.marker)
-    lo = marks[0]
+    if args.since:
+        lo = args.since
+        marks = [lo]
+    else:
+        marks = user_marks(target, args.marker)
+        lo = marks[0]
     hi = args.until
 
     main_eff, calls, a = scan(target, lo, hi)
     print(f"세션: {sid}")
-    print(f"실행 시작: {lo}   (마커 '{args.marker}' 발화 {len(marks)}회 중 첫 번째)")
+    print(f"실행 시작: {lo}   (구간 시작)")
     if hi:
         print(f"실행 종료: {hi}")
     else:
