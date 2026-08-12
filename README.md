@@ -224,12 +224,19 @@ These are measured golden-set and regression-run results, not marketing estimate
 | **Hallucinated values** | **0** | Precision **1.000** on the golden set |
 | **Tutorial step recall (R1)** | **0.913** | 21 / 23 expected steps recovered on the tutorial golden set |
 | **Value F1** | **0.909** | Settings, labels, and numeric values |
-| **Orchestrator image cost** | **−95%** | `cache_write` 432,788 → 21,594 |
-| **Total pipeline cost** | **−27%** | 3.35M → 2.44M tokens on a 19-minute video |
+| **Orchestrator image cost** | **−95%** | `cache_write` 432,788 → 21,594 on the frame-reading calls |
+| **Orchestrator `cache_write`, whole run** | **−76%** | 185,965 → 43,923 raw, same 19-minute video |
+| **Total pipeline cost** | **−11%** | 2.82M → 2.50M effective tokens, same video, same window convention |
 | **Download + analysis** | **8.1× faster** | 154s → 19s |
 | **Zoom extraction** | **5.4× faster** | 327s → 61s |
 | **Audit escalation** | **0%** | On the selected audit model |
-| **Tests** | **223 passing** | Current regression suite |
+| **Tests** | **224 passing** | Current regression suite |
+
+**Why total cost falls less than `cache_write`:** `cache_read` scales with how much conversation
+already precedes the run, not with the pipeline. Between the two measurements above it went
+464K → 631K (weighted) purely from session position, absorbing most of the `cache_write` win.
+Any cost claim here is therefore a same-video, same-window-convention comparison — see the
+re-measurement note in [`docs/eval/measure-cost.py`](docs/eval/measure-cost.py).
 
 See [`docs/eval/`](docs/eval/) for the evaluation protocol and cost-accounting tool.
 
@@ -308,7 +315,7 @@ Every round had to demonstrate no quality regression or be rolled back.
 | **R1** | Parallelized scripts; compared three audit models | Analysis **8.1×** faster, zoom **5.4×** faster, audit escalation **50% → 0%** |
 | **R2** | Added coverage audit, formatting/state-change checks, and crop-based re-reading | Injected errors detected; **OCR missed its gate and was rolled back** |
 | **R3** | Delegated guide construction to a Sonnet builder | Values remained **33/33** identical; narrative quality remained equivalent |
-| **R4** | Removed images from the orchestrator context | `cache_write` **−95%**, total cost **−27%**, with a net quality improvement |
+| **R4** | Removed images from the orchestrator context | `cache_write` **−95%** on frame-reading calls (**−76%** across the whole run), total cost **−11%**, with a net quality improvement |
 
 <details>
 <summary><b>Lessons worth keeping</b></summary>
