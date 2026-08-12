@@ -2,45 +2,102 @@
 
 # 🎬 tuto
 
-### Turn YouTube tutorials into verified, reproducible instructions for Claude Code.
+### Give AI agents eyes for YouTube.
 
-**Not another AI video summarizer.** `tuto` reads the actual screen—settings, buttons, values, and operation order—then asks independent audit agents to challenge the result before it reaches you.
+Turn YouTube videos into **verified evidence** that AI agents can reason over — transcripts, screen text, slides, UI, charts, numbers, actions, and timestamps.
 
-**유튜브를 요약하는 게 아니라, 실제로 따라 할 수 있게 만듭니다.**
+**Claude와 AI 에이전트가 YouTube 영상을 제대로 읽게 만듭니다.**
 
-자막만 믿지 않고 화면의 설정값·버튼명·조작 순서를 직접 읽고 독립 감사 에이전트가 검증합니다.
+자막뿐 아니라 화면·슬라이드·UI·숫자까지 분석하고, 검증된 근거를 제공합니다.
 
-[![Version](https://img.shields.io/badge/version-0.1.6-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-101%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-137%20passed-brightgreen.svg)](tests/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://claude.com/claude-code)
 [![Languages](https://img.shields.io/badge/video-KO%20%7C%20EN-orange.svg)](#)
 
-```text
-/tuto https://youtu.be/VIDEO_ID
-```
-
-**YouTube → screen evidence → verified steps → `guide.md`**
+**Understand it. Learn from it. Follow it. Ask questions about it.**
+**— With evidence.**
 
 </div>
 
 ---
 
-## Why tuto?
+## Three modes, one evidence base
 
-Tutorial captions are often incomplete or wrong exactly where precision matters most.
+| Mode | Command | Output |
+|---|---|---|
+| **GUIDE** | `/tuto <url>` | 재현 가능한 따라하기 단계 · Reproducible steps |
+| **INSIGHT** | `/tuto <url> --insight` | 핵심 주장·수치·근거 지도 · Claims, numbers, evidence map |
+| **ASK** | `/tuto <url> "질문"` | 타임스탬프·근거 기반 답변 · Grounded answers |
+
+모든 모드가 같은 **`evidence.json`**을 공유합니다. 한 번 분석하면 재분석 없이 재사용됩니다.
+
+> *All three modes share one `evidence.json`. Analyze once, reuse without re-downloading.*
+
+---
+
+## Why evidence, not summaries
+
+The values that matter in a video are often **never spoken** — they exist only on screen.
 
 | Caption / ASR said | Screen actually showed |
 |---|---|
-| `python` | **`python3`**—confirmed by a user following the tutorial |
-| slowdown **98x** | **`0.98x`**—the Korean ASR dropped the decimal point |
-| **16x** difference | **`16.3x`**—90,991 vs. 5,584 |
+| `python` | **`python3`** — confirmed by a user following along |
+| slowdown **98x** | **`0.98x`** — the Korean ASR dropped the decimal point |
+| **16x** difference | **`16.3x`** — 90,991 vs. 5,584 |
 | **600** followers | **`576`** |
-| `irresistible` | **`irresistable`**—the original on-screen typo is preserved |
+| `irresistible` | **`irresistable`** — the original on-screen typo is preserved |
 
-`tuto` treats the **screen as evidence**. When captions and frames disagree, the frame wins and the conflict is noted. If a value cannot be read safely, tuto says `⚠️ needs visual check` (`⚠️ 화면 확인 필요` in Korean output) instead of guessing.
+`tuto` treats the **screen as evidence**. When captions and frames disagree, the frame wins **and the conflict is preserved as structured data** — not buried in prose:
 
-> The goal is not to sound confident. The goal is to make the tutorial reproducible.
+```json
+{
+  "id": "c1",
+  "claim": "훅 A/B 조회수 격차가 16.3배",
+  "timestamp": 132.0,
+  "evidence": [
+    { "source": "frame",      "ref": "v1" },
+    { "source": "transcript", "ref": "42" }
+  ],
+  "conflict": { "transcript": "16배", "screen": "16.3x" },
+  "verification": { "status": "verified", "auditor": "sonnet" }
+}
+```
+
+That `conflict` field is the point. An agent can **programmatically find the gap** between what a presenter claimed and what their own slide showed.
+
+If a value cannot be read safely, `tuto` emits `⚠️ needs visual check` instead of guessing. Transcript evidence and visual evidence are never merged into one source — `"source": "both"` is rejected by the schema.
+
+> **Separation of concerns.** `tuto` answers *what was said and what was on screen*. What it **means for you** is the calling agent's job.
+
+<details>
+<summary><b>evidence.json — full structure</b></summary>
+
+<br>
+
+```jsonc
+{
+  "schema_version": "0.2",
+  "video":       { "id", "title", "url", "duration", "channel" },
+  "video_type":  { "primary": "tutorial|presentation|interview|lecture|demo|screen-recording|mixed",
+                   "confidence": "high|medium|low", "hint": { /* deterministic signal-based hint */ } },
+  "provenance":  { "transcript": { "source", "lang", "segments", "dupes_removed" },
+                   "signals":    { "heatmap", "chapters", "activity_peaks", "flags" },
+                   "frames":     { "map": [ { "file", "t", "res" } ], "zoom": [ ... ] } },
+  "segments":         [ { "idx", "start", "end", "transcript" } ],
+  "visual_evidence":  [ { "id", "type", "value", "timestamp", "frame", "confidence" } ],
+  "claims":           [ { "id", "claim", "evidence", "conflict", "verification" } ],
+  "gaps":             [ { "start", "end", "reason" } ],
+  "flags":            [ ... ]
+}
+```
+
+Confidence is **never a fabricated number** — the pipeline has no basis for probability estimates, so only `high|medium|low` and `verified|disputed|unverifiable|unaudited` are allowed. `unaudited` is deliberately distinct from `verified`: sample audits cover 6 claims, so most claims are simply not audited, and that must not look like passing.
+
+Full spec: [`docs/eval/evidence-schema.md`](docs/eval/evidence-schema.md)
+
+</details>
 
 ---
 
@@ -64,16 +121,25 @@ Restart Claude Code, then run:
 /tuto https://youtu.be/VIDEO_ID
 ```
 
-Or ask for only the part you need:
+Or pick a mode:
 
 ```text
-/tuto https://youtu.be/VIDEO_ID show me only the Python PATH setup
+/tuto https://youtu.be/VIDEO_ID --insight
+/tuto https://youtu.be/VIDEO_ID "이 영상에서 가장 중요한 주장 5개와 근거를 알려줘"
+```
+
+Already analyzed? Ask without re-downloading:
+
+```text
+"아까 영상에서 16.3x가 무슨 의미였어?"
 ```
 
 Output:
 
 ```text
-~/.yta/cache/<video_id>/guide.md
+~/.yta/cache/<video_id>/evidence.json    ← structured evidence (for agents)
+~/.yta/cache/<video_id>/guide.md         ← GUIDE mode
+~/.yta/cache/<video_id>/insight.md       ← INSIGHT mode
 ```
 
 ### Update
@@ -152,7 +218,7 @@ These are measured golden-set and regression-run results, not marketing estimate
 | **Download + analysis** | **8.1× faster** | 154s → 19s |
 | **Zoom extraction** | **5.4× faster** | 327s → 61s |
 | **Audit escalation** | **0%** | On the selected audit model |
-| **Tests** | **101 passing** | Current regression suite |
+| **Tests** | **137 passing** | Current regression suite |
 
 See [`docs/eval/`](docs/eval/) for the evaluation protocol and cost-accounting tool.
 
@@ -305,6 +371,7 @@ If a tutorial breaks `tuto`, a public video URL and the missed timestamp are esp
 | [`skills/tuto/SKILL.md`](skills/tuto/SKILL.md) | Pipeline and orchestration contract |
 | [`docs/superpowers/specs/`](docs/superpowers/specs/) | Design specs by iteration |
 | [`docs/superpowers/plans/`](docs/superpowers/plans/) | Implementation plans |
+| [`docs/eval/evidence-schema.md`](docs/eval/evidence-schema.md) | **evidence.json schema — canonical spec** |
 | [`docs/eval/`](docs/eval/) | Golden-set protocol and cost tooling |
 
 ---
@@ -315,8 +382,8 @@ If a tutorial breaks `tuto`, a public video URL and the missed timestamp are esp
 
 <div align="center">
 
-**If tuto saves you from replaying a tutorial frame by frame, consider giving the repo a ⭐.**
+**If tuto saves you from scrubbing a video frame by frame, consider giving the repo a ⭐.**
 
-<sub>Built as a Claude Code plugin · 101 tests passing</sub>
+<sub>Built as a Claude Code plugin · 137 tests passing</sub>
 
 </div>
