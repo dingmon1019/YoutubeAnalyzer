@@ -2,40 +2,51 @@
 
 # 🎬 tuto
 
-### Give AI agents eyes for YouTube.
+### Let AI watch YouTube for you.
 
-Turn YouTube videos into **verified evidence** that AI agents can reason over — transcripts, screen text, slides, UI, charts, numbers, actions, and timestamps.
+Turn YouTube videos into **verified working knowledge** for AI agents — transcripts, screen text, slides, UI, charts, numbers, actions, and timestamps.
 
-**Claude와 AI 에이전트가 YouTube 영상을 제대로 읽게 만듭니다.**
+**유튜브 영상을 직접 보지 않아도 됩니다.**
 
-자막뿐 아니라 화면·슬라이드·UI·숫자까지 분석하고, 검증된 근거를 제공합니다.
+AI가 대신 영상을 보고, 자막과 화면을 함께 이해하고, 검증된 지식으로 변환합니다.
+이후 AI는 그 내용을 설명하거나 질문에 답하고, 현재 작업과 비교하거나 튜토리얼을 따라 할 수 있습니다.
 
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-137%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-152%20passed-brightgreen.svg)](tests/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://claude.com/claude-code)
 [![Languages](https://img.shields.io/badge/video-KO%20%7C%20EN-orange.svg)](#)
 
-**Understand it. Learn from it. Follow it. Ask questions about it.**
-**— With evidence.**
+```text
+/tuto <youtube-url> [자연어 요청]
+```
 
 </div>
 
 ---
 
-## Three modes, one evidence base
+## One interface
 
-| Mode | Command | Output |
-|---|---|---|
-| **GUIDE** | `/tuto <url>` | 재현 가능한 따라하기 단계 · Reproducible steps |
-| **INSIGHT** | `/tuto <url> --insight` | 핵심 주장·수치·근거 지도 · Claims, numbers, evidence map |
-| **ASK** | `/tuto <url> "질문"` | 타임스탬프·근거 기반 답변 · Grounded answers |
+모드를 외울 필요가 없습니다. 영상 URL과 하고 싶은 말을 그대로 적으면 됩니다.
 
-모든 모드가 같은 **`evidence.json`**을 공유합니다. 한 번 분석하면 재분석 없이 재사용됩니다.
+```text
+/tuto <url> 이 영상 내용을 내가 이해할 수 있게 설명해줘
+/tuto <url> 여기서 알려주는 방법과 우리 프로젝트를 비교해서 적용할 점을 찾아줘
+/tuto <url> 영상에서 사용한 설정값과 명령어를 정확히 정리해줘
+/tuto <url> 이 튜토리얼을 이해한 다음 현재 프로젝트에 적용해줘
+```
 
-> *All three modes share one `evidence.json`. Analyze once, reuse without re-downloading.*
+**요청은 분석 깊이를 바꾸지 않습니다.** "핵심만 알려줘"라고 해도 영상을 얕게 보지 않습니다 —
+사용자는 영상을 직접 보지 않으므로 무엇이 빠졌는지 검증할 수 없기 때문입니다.
+요청이 바꾸는 것은 **수집한 지식을 어떻게 쓸지**입니다.
 
----
+> **Separation of concerns**
+> `tuto` = eyes + video understanding · calling agent = reasoning + hands
+
+| 산출물 | 용도 |
+|---|---|
+| **`evidence.json`** | 기계가 읽는 정본 — 근거가 프레임·타임스탬프까지 추적됨 |
+| **`video.md`** | 사람이 읽는 문서 — **영상 구조에 맞춰 자율 구성** (고정 템플릿 없음) |
 
 ## Why evidence, not summaries
 
@@ -121,11 +132,11 @@ Restart Claude Code, then run:
 /tuto https://youtu.be/VIDEO_ID
 ```
 
-Or pick a mode:
+Or just say what you want:
 
 ```text
-/tuto https://youtu.be/VIDEO_ID --insight
-/tuto https://youtu.be/VIDEO_ID "이 영상에서 가장 중요한 주장 5개와 근거를 알려줘"
+/tuto https://youtu.be/VIDEO_ID 이 영상에서 가장 중요한 주장 5개와 근거를 알려줘
+/tuto https://youtu.be/VIDEO_ID 이 튜토리얼을 우리 프로젝트에 적용해줘
 ```
 
 Already analyzed? Ask without re-downloading:
@@ -137,9 +148,8 @@ Already analyzed? Ask without re-downloading:
 Output:
 
 ```text
-~/.yta/cache/<video_id>/evidence.json    ← structured evidence (for agents)
-~/.yta/cache/<video_id>/guide.md         ← GUIDE mode
-~/.yta/cache/<video_id>/insight.md       ← INSIGHT mode
+~/.yta/cache/<video_id>/evidence.json    ← canonical, for agents
+~/.yta/cache/<video_id>/video.md         ← human-readable
 ```
 
 ### Update
@@ -184,7 +194,7 @@ No API key is required. Transcript acquisition falls back through native caption
 
 ## What you get
 
-A guide is written as actionable steps with timestamped visual evidence.
+`video.md`의 구조는 영상에 따라 달라집니다. 튜토리얼이면 절차 중심, 강의면 개념 중심으로 조직됩니다. 아래는 튜토리얼 예시입니다.
 
 ```markdown
 ## Step 4: Run installer—Add Python to PATH + Install Now (02:56–04:05)
@@ -218,7 +228,7 @@ These are measured golden-set and regression-run results, not marketing estimate
 | **Download + analysis** | **8.1× faster** | 154s → 19s |
 | **Zoom extraction** | **5.4× faster** | 327s → 61s |
 | **Audit escalation** | **0%** | On the selected audit model |
-| **Tests** | **137 passing** | Current regression suite |
+| **Tests** | **152 passing** | Current regression suite |
 
 See [`docs/eval/`](docs/eval/) for the evaluation protocol and cost-accounting tool.
 
@@ -227,15 +237,20 @@ See [`docs/eval/`](docs/eval/) for the evaluation protocol and cost-accounting t
 ## How it works
 
 ```text
-MAP                    ZOOM                   BUILD                 VERIFY
-────────────────       ─────────────────      ─────────────────     ─────────────────
-analyze.py              reading agents         guide builder         sample audits ×6
-├─ yt-dlp               → zoom-plan.json       ├─ frame reading      ├─ independent context
-├─ native captions      ├─ caption cues        ├─ crop + re-read     ├─ "try to refute"
-├─ heatmap / chapters   ├─ chapter bounds      └─ guide.md           ├─ escalate conflicts
-├─ activity peaks       ├─ activity coverage                         └─ coverage audit
-└─ map frames           └─ gap detection
+MAP              ZOOM             EVIDENCE          VERIFY            ORGANIZE
+──────────       ──────────       ──────────        ──────────        ──────────
+analyze.py       reading agent    builder           sample audits ×6  builder
+├ yt-dlp         → zoom-plan      ├ frame reading   ├ independent ctx ├ 9 coverage
+├ captions       ├ caption cues   ├ crop + re-read  ├ "try to refute"   questions
+├ heatmap        ├ chapter bounds ├ visual_evidence ├ escalate        ├ outline chosen
+├ chapters       ├ activity cover ├ claims          └ coverage audit    per video
+├ activity peaks └ gap detection  └ knowledge_items        ↓          └ video.md
+└ map frames                             ↓            --verdicts
+                                   evidence.json ←─────────┘
 ```
+
+`evidence.json`이 정본이고 `video.md`는 그것을 사람이 읽게 조직한 것입니다.
+**문서를 먼저 쓰고 근거를 맞추지 않습니다** — 순서가 바뀌면 문서에 맞춰 근거를 지어내게 됩니다.
 
 ### 1. Signal-weighted frame selection
 
@@ -384,6 +399,6 @@ If a tutorial breaks `tuto`, a public video URL and the missed timestamp are esp
 
 **If tuto saves you from scrubbing a video frame by frame, consider giving the repo a ⭐.**
 
-<sub>Built as a Claude Code plugin · 137 tests passing</sub>
+<sub>Built as a Claude Code plugin · 152 tests passing</sub>
 
 </div>
