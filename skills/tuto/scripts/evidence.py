@@ -284,19 +284,33 @@ def _knowledge_points(ev: dict) -> list:
     return pts
 
 
-def uncovered_observations(ev: dict, obs: list, window: float = 45.0) -> list:
+def uncovered_observations(ev: dict, obs: list, window: float = 20.0) -> list:
     """evidence가 통째로 놓친 것으로 **의심되는** 시각 관측을 고른다.
 
     이 프로젝트의 핵심 차별점은 자막에 없고 화면에만 있는 정보를 읽는 것이다. 그런데
     빌더가 그걸 놓치면 자막 기반 커버리지 감사도 **존재 자체를 모른다** — 그게 사각지대다.
 
-    규칙: 관측 시각 ±window초 안에 **같은 kind의** knowledge_item(또는 claim)이 없으면 후보.
-    `numeric`·`other`는 kind가 특정되지 않으므로 아무 항목이나 근처에 있으면 covered로 본다
-    (과잉 후보 방지).
+    규칙: 관측 시각 ±window초 안에 **evidence 항목이 하나도 없으면** 후보.
+
+    **kind 일치는 보지 않는다** — 실측으로 폐기한 설계다. 판독 에이전트와 빌더는 같은
+    화면을 다르게 분류한다. 실측(t1-XAN6AyOs): t=492s에 evidence 항목이 10건이나 있는데
+    아무것도 `comparison` 타입이 아니라는 이유로 후보가 됐다(판독은 "비교 카드", 빌더는
+    "claim"). kind 일치를 요구하면 오탐이 11건 중 8건까지 올라간다.
+
+    **window=20초는 실측으로 정했다.** 3편 스윕 결과:
+
+        window  모드    PlMpk   KEidt   t1-XA   진짜누락(ablation)
+        20      loose   0/10    0/9     2/11    검출 O   ← 채택
+        30      loose   0/10    0/9     2/11    검출 X
+        45      loose   0/10    0/9     1/11    검출 X
+        45      strict  0/10    3/9     8/11    검출 O (오탐 과다)
+
+    30초 이상이면 근처의 무관한 항목이 진짜 누락을 덮어버린다(ablation에서 28초 떨어진
+    procedure가 빠진 command를 가렸다). 10~15초는 오탐이 늘기 시작한다.
 
     **이건 힌트지 판정이 아니다.** 최종 판단은 커버리지 감사 에이전트가 원본 프레임·자막으로
     재확인해서 내린다."""
-    pts = _knowledge_points(ev)
+    pts = [t for _, t in _knowledge_points(ev)]
     out = []
     for o in obs or []:
         if not isinstance(o, dict):
@@ -305,15 +319,12 @@ def uncovered_observations(ev: dict, obs: list, window: float = 45.0) -> list:
             t = float(o.get("timestamp"))
         except (TypeError, ValueError):
             continue
-        kind = o.get("kind")
-        loose = kind in ("numeric", "other")
-        hit = any(abs(pt - t) <= window and (loose or ptype == kind) for ptype, pt in pts)
-        if not hit:
+        if not any(abs(pt - t) <= window for pt in pts):
             out.append(o)
     return out
 
 
-def coverage_input(ev: dict, obs: list, window: float = 45.0) -> str:
+def coverage_input(ev: dict, obs: list, window: float = 20.0) -> str:
     """커버리지 감사 에이전트에게 줄 대조 블록."""
     lines = ["== EVIDENCE DIGEST =="]
     lines += knowledge_digest(ev) or ["(비어 있음)"]

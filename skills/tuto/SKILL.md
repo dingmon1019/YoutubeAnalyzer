@@ -433,7 +433,9 @@ evidence.json의 claims[].claim + knowledge_items[].content
 python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --coverage-input
 ```
 
-사전 필터는 "관측 시각 ±45초 안에 같은 kind의 지식이 없는 관측"을 미리 골라 준다.
+사전 필터는 "관측 시각 ±20초 안에 evidence 항목이 하나도 없는 관측"을 미리 골라 준다.
+**kind 일치는 보지 않는다** — 판독 에이전트와 빌더가 같은 화면을 다르게 분류하기 때문이다
+(실측: kind 일치를 요구하면 오탐이 11건 중 8건까지 올라갔다).
 **이건 힌트지 판정이 아니다** — 최종 판단은 감사 에이전트가 원본으로 재확인해 내린다.
 (관측 파일이 없으면 digest만 나온다. §2가 실패했어도 커버리지는 돈다.)
 

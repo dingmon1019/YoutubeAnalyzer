@@ -750,10 +750,22 @@ def test_observation_is_covered_when_same_kind_is_nearby():
     assert evidence.uncovered_observations(ev, [_obs("command", 318.0)]) == []
 
 
-def test_observation_not_covered_by_different_kind_nearby():
-    """같은 시각에 concept만 있으면 command 관측은 여전히 후보다."""
+def test_kind_mismatch_alone_is_not_a_candidate():
+    """kind가 달라도 근처에 evidence가 있으면 후보가 아니다 — **실측으로 정한 규칙**이다.
+
+    판독 에이전트와 빌더는 같은 화면을 다르게 분류한다. t1-XAN6AyOs 실측에서 t=492s에
+    evidence 항목이 10건 있는데 아무것도 comparison 타입이 아니라는 이유로 후보가 됐다
+    (판독은 "비교 카드", 빌더는 "claim"). kind 일치를 요구하면 오탐 11건 중 8건."""
     ev = _ev_with_frames(kn=[("concept", "개념", 320.0)])
-    assert len(evidence.uncovered_observations(ev, [_obs("command", 318.0)])) == 1
+    assert evidence.uncovered_observations(ev, [_obs("command", 318.0)]) == []
+
+
+def test_window_default_is_twenty_seconds():
+    """30초 이상이면 무관한 인접 항목이 진짜 누락을 덮는다 (ablation 실측)."""
+    ev = _ev_with_frames(kn=[("procedure", "다른 절차", 257.0)])
+    obs = [_obs("command", 285.0)]
+    assert len(evidence.uncovered_observations(ev, obs)) == 1        # 기본 20s → 검출
+    assert evidence.uncovered_observations(ev, obs, window=45.0) == []  # 45s → 미탐
 
 
 def test_observation_outside_window_is_candidate():

@@ -233,8 +233,24 @@ vision pass를 만들지 않는다.
 검증: `validate_observations(obs, ev)` — kind 열거형 · `observation` 비어 있지 않음 ·
 `timestamp` 숫자 · `frame`이 `provenance.frames`에 실재.
 
-대조: `uncovered_observations(ev, obs, window=45.0)` — 관측 ±45초 안에 **같은 kind의**
-지식이 없으면 후보. `numeric`·`other`는 kind 무관 매칭(과잉 후보 방지).
+대조: `uncovered_observations(ev, obs, window=20.0)` — 관측 ±20초 안에 **evidence 항목이
+하나도 없으면** 후보.
+
+**kind 일치는 보지 않는다 — 실측으로 폐기한 설계다.** 판독 에이전트와 빌더는 같은 화면을
+다르게 분류한다(판독 "비교 카드" vs 빌더 "claim"). kind 일치를 요구하면 오탐이 11건 중
+8건까지 올라갔다.
+
+**window=20초는 3편 스윕으로 정했다:**
+
+| window | 모드 | PlMpk | KEidt | t1-XA | 진짜 누락 검출 |
+|---|---|---|---|---|---|
+| **20** | **loose** | **0/10** | **0/9** | **2/11** | **O** ← 채택 |
+| 30 | loose | 0/10 | 0/9 | 2/11 | X |
+| 45 | loose | 0/10 | 0/9 | 1/11 | X |
+| 45 | strict | 0/10 | 3/9 | 8/11 | O (오탐 과다) |
+
+30초 이상이면 무관한 인접 항목이 진짜 누락을 덮는다.
+
 **힌트지 판정이 아니다** — 최종 판단은 커버리지 감사 에이전트가 원본으로 재확인해 내린다.
 
 ---
