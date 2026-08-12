@@ -5,7 +5,7 @@
 
 ## 왜 이 파일이 중심 산출물인가
 
-`guide.md`·`insight.md`는 **사람이 읽는 렌더링**이다. 상위 에이전트(Claude·ChatGPT 등)가
+`video.md`는 **사람이 읽는 렌더링**이다. 상위 에이전트(Claude·ChatGPT 등)가
 추론에 쓰는 것은 `evidence.json`이다. 문서는 문장으로 뭉개지지만 evidence는
 `claim → evidence.ref → visual_evidence.frame`으로 근거가 끝까지 추적된다.
 
@@ -171,6 +171,18 @@
 
 `evidence`는 `claims`와 **완전히 같은 규칙**을 쓴다(`_check_evidence_refs` 공유).
 `content`가 비어 있으면 거부된다.
+
+**`verification`도 `claims`와 같다** (v0.3.1) — 기본값 `unaudited`, 감사 후
+`verified|disputed|unverifiable`. 표본 감사는 claims와 knowledge_items를 **한 풀에서**
+행동 영향도 순으로 뽑는다(`evidence.py --audit-candidates N`):
+
+```
+command > setting > action > criterion > prerequisite > warning
+> procedure > result > comparison > claim > concept > example
+```
+
+잘못 판독된 `command`나 `setting`은 단순 주장 오류보다 실행에서 위험하기 때문이다.
+`apply_verdicts`는 `id`로 두 컬렉션을 함께 찾는다(`c*`/`k*` 접두사가 구분).
 
 ### `verification.status`
 

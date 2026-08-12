@@ -530,3 +530,144 @@ def test_validate_rejects_non_dict_claims_and_visual_evidence():
     errs = evidence.validate(ev)
     assert any("claims" in e for e in errs)
     assert any("visual_evidence" in e for e in errs)
+
+
+# ── v0.3.1: knowledge_items 감사 ───────────────────────────────────────────
+
+def test_knowledge_items_default_to_unaudited():
+    ev = evidence.merge(_skel(), {"knowledge_items": [
+        {"type": "setting", "content": "Add Python 3.9 to PATH를 체크한다", "timestamp": 203.0,
+         "evidence": [{"source": "transcript", "ref": "0"}]}]})
+    assert ev["knowledge_items"][0]["verification"]["status"] == "unaudited"
+
+
+def test_verdict_applies_to_knowledge_item_by_id():
+    ev = evidence.merge(_skel(), {"knowledge_items": [
+        {"type": "setting", "content": "x", "timestamp": 1.0,
+         "evidence": [{"source": "transcript", "ref": "0"}]}]})
+    ev = evidence.apply_verdicts(ev, [
+        {"id": "k1", "status": "verified", "auditor": "sonnet", "note": "프레임 대조"}])
+    assert ev["knowledge_items"][0]["verification"]["status"] == "verified"
+
+
+def test_verdict_can_dispute_knowledge_item():
+    ev = evidence.merge(_skel(), {"knowledge_items": [
+        {"type": "command", "content": "pip install wrong-pkg", "timestamp": 1.0,
+         "evidence": [{"source": "transcript", "ref": "0"}]}]})
+    ev = evidence.apply_verdicts(ev, [{"id": "k1", "status": "disputed"}])
+    assert ev["knowledge_items"][0]["verification"]["status"] == "disputed"
+
+
+def test_verdict_legacy_claim_id_still_works():
+    """기존 verdicts.json은 claim_id 키를 쓴다 — 깨지 않는다."""
+    ev = evidence.merge(_skel(), {"claims": [
+        {"claim": "x", "timestamp": 1.0, "evidence": [{"source": "transcript", "ref": "0"}]}]})
+    ev = evidence.apply_verdicts(ev, [{"claim_id": "c1", "status": "verified"}])
+    assert ev["claims"][0]["verification"]["status"] == "verified"
+
+
+def test_verdict_for_missing_knowledge_item_flags_orphan():
+    ev = evidence.apply_verdicts(_skel(), [{"id": "k99", "status": "verified"}])
+    assert any("verdict_orphan: k99" in f for f in ev["flags"])
+
+
+def test_validate_rejects_bad_knowledge_verification_status():
+    ev = evidence.merge(_skel(), {"knowledge_items": [
+        {"type": "setting", "content": "x", "timestamp": 1.0,
+         "evidence": [{"source": "transcript", "ref": "0"}],
+         "verification": {"status": "probably"}}]})
+    assert any("probably" in e for e in evidence.validate(ev))
+
+
+def test_audit_candidates_prioritises_actionable_types():
+    """실행에 영향을 주는 type이 먼저 온다 — command/setting/action이 concept보다 위험하다."""
+    ev = _skel()
+    for t, c in [("concept", "개념"), ("command", "pip install x"),
+                 ("example", "예시"), ("setting", "PATH 체크"), ("criterion", "성공 기준")]:
+        ev = evidence.merge(ev, {"knowledge_items": [
+            {"type": t, "content": c, "timestamp": 1.0,
+             "evidence": [{"source": "transcript", "ref": "0"}]}]})
+    ev = evidence.merge(ev, {"claims": [
+        {"claim": "주장", "timestamp": 1.0, "evidence": [{"source": "transcript", "ref": "0"}]}]})
+
+    picked = evidence.audit_candidates(ev, limit=3)
+    types = [p["type"] for p in picked]
+    assert types[0] in ("command", "setting", "criterion")
+    assert "concept" not in types, "우선순위 낮은 type이 상위 3건에 들어갔다"
+    assert all("id" in p and "content" in p and "evidence" in p for p in picked)
+
+
+def test_audit_candidates_includes_claims_when_knowledge_is_sparse():
+    ev = evidence.merge(_skel(), {"claims": [
+        {"claim": f"주장{i}", "timestamp": 1.0,
+         "evidence": [{"source": "transcript", "ref": "0"}]} for i in range(3)]})
+    picked = evidence.audit_candidates(ev, limit=6)
+    assert len(picked) == 3
+    assert all(p["kind"] == "claim" for p in picked)
+
+
+def test_audit_candidates_skips_already_audited():
+    ev = evidence.merge(_skel(), {"knowledge_items": [
+        {"type": "command", "content": "x", "timestamp": 1.0,
+         "evidence": [{"source": "transcript", "ref": "0"}]}]})
+    ev = evidence.apply_verdicts(ev, [{"id": "k1", "status": "verified"}])
+    assert evidence.audit_candidates(ev, limit=6) == []
+
+
+# ── v0.3.1: coverage audit 입력 (evidence 기준) ────────────────────────────
+
+def _ev_with(items, claims=()):
+    ev = _skel()
+    if items:
+        ev = evidence.merge(ev, {"knowledge_items": [
+            {"type": t, "content": c, "timestamp": 1.0,
+             "evidence": [{"source": "transcript", "ref": "0"}]} for t, c in items]})
+    if claims:
+        ev = evidence.merge(ev, {"claims": [
+            {"claim": c, "timestamp": 1.0, "evidence": [{"source": "transcript", "ref": "0"}]}
+            for c in claims]})
+    return ev
+
+
+def test_knowledge_digest_lists_type_and_content():
+    ev = _ev_with([("concept", "대기열은 비팔로워 전용"), ("command", "pip install -U yt-dlp")])
+    d = evidence.knowledge_digest(ev)
+    assert "[command] pip install -U yt-dlp" in d
+    assert "[concept] 대기열은 비팔로워 전용" in d
+
+
+def test_knowledge_digest_includes_claims():
+    d = evidence.knowledge_digest(_ev_with([], claims=["조회수가 16.3배 차이난다"]))
+    assert any(x.startswith("[claim]") and "16.3" in x for x in d)
+
+
+def test_knowledge_digest_is_what_coverage_audit_compares(tmp_path):
+    """커버리지 감사의 심판 대상은 video.md 제목이 아니라 evidence의 실제 지식이다.
+
+    사용자 지적: adaptive video.md는 '## Phase 1' 같은 제목만으로 내부에 무엇이
+    들어갔는지 알 수 없다. 제목이 같아도 evidence 내용이 다르면 누락이 잡혀야 한다."""
+    have = _ev_with([("concept", "개념 A"), ("command", "명령 B")])
+    want = _ev_with([("concept", "개념 A"), ("command", "명령 B"), ("criterion", "기준 C")])
+
+    d_have, d_want = evidence.knowledge_digest(have), evidence.knowledge_digest(want)
+    missing = [x for x in d_want if x not in d_have]
+    assert missing == ["[criterion] 기준 C"], f"누락 검출 실패: {missing}"
+
+
+def test_knowledge_digest_empty_on_bare_skeleton():
+    assert evidence.knowledge_digest(_skel()) == []
+
+
+def test_cli_audit_candidates_prints_ids(tmp_path):
+    ev = _ev_with([("command", "pip install x"), ("concept", "개념")])
+    evidence.save(tmp_path, ev)
+    p = _run([str(tmp_path), "--audit-candidates", "2"])
+    assert p.returncode == 0, p.stderr
+    assert "command" in p.stdout and "k1" in p.stdout
+
+
+def test_cli_digest_prints_lines(tmp_path):
+    evidence.save(tmp_path, _ev_with([("setting", "PATH 체크")]))
+    p = _run([str(tmp_path), "--digest"])
+    assert p.returncode == 0
+    assert "[setting] PATH 체크" in p.stdout

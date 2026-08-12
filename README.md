@@ -11,9 +11,9 @@ Turn YouTube videos into **verified working knowledge** for AI agents — transc
 AI가 대신 영상을 보고, 자막과 화면을 함께 이해하고, 검증된 지식으로 변환합니다.
 이후 AI는 그 내용을 설명하거나 질문에 답하고, 현재 작업과 비교하거나 튜토리얼을 따라 할 수 있습니다.
 
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
+[![Version](https://img.shields.io/badge/version-0.3.1-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-160%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-199%20passed-brightgreen.svg)](tests/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://claude.com/claude-code)
 [![Languages](https://img.shields.io/badge/video-KO%20%7C%20EN-orange.svg)](#)
 
@@ -89,7 +89,7 @@ If a value cannot be read safely, `tuto` emits `⚠️ needs visual check` inste
 
 ```jsonc
 {
-  "schema_version": "0.2",
+  "schema_version": "0.3",
   "video":       { "id", "title", "url", "duration", "channel" },
   "video_type":  { "primary": "tutorial|presentation|interview|lecture|demo|screen-recording|mixed",
                    "confidence": "high|medium|low", "hint": { /* deterministic signal-based hint */ } },
@@ -207,7 +207,7 @@ No API key is required. Transcript acquisition falls back through native caption
 
 ## Audit stamp
 Sample audit: 5/6 claims matched, 1 corrected; 1 claim escalated for re-checking.
-Coverage audit: 2 missing steps recovered.
+Coverage audit: 2 missing knowledge items recovered.
 ```
 
 Follow-up questions in the same session reuse cached frames and captions, so the video does not need to be downloaded again.
@@ -221,14 +221,14 @@ These are measured golden-set and regression-run results, not marketing estimate
 | Metric | Result | Meaning |
 |---|:---:|---|
 | **Hallucinated values** | **0** | Precision **1.000** on the golden set |
-| **Step recall (R1)** | **0.913** | 21 / 23 expected steps recovered |
+| **Step recall (R1)** | **0.913** | 21 / 23 expected knowledge items recovered |
 | **Value F1** | **0.909** | Settings, labels, and numeric values |
 | **Orchestrator image cost** | **−95%** | `cache_write` 432,788 → 21,594 |
 | **Total pipeline cost** | **−27%** | 3.35M → 2.44M tokens on a 19-minute video |
 | **Download + analysis** | **8.1× faster** | 154s → 19s |
 | **Zoom extraction** | **5.4× faster** | 327s → 61s |
 | **Audit escalation** | **0%** | On the selected audit model |
-| **Tests** | **160 passing** | Current regression suite |
+| **Tests** | **199 passing** | Current regression suite |
 
 See [`docs/eval/`](docs/eval/) for the evaluation protocol and cost-accounting tool.
 
@@ -268,13 +268,17 @@ Low-motion verification sections near the end of tutorials are easy for samplers
 
 ### 4. Independent adversarial audit
 
-A fresh agent receives a single claim and its evidence frame—**not the whole guide**—and is asked to refute the claim. Disagreements can be escalated for re-checking.
+High-value claims **and actionable knowledge items** are independently challenged against their source evidence. A fresh agent receives a single item and its evidence—**not the rendered document**—and is asked to refute it. Disagreements can be escalated for re-checking.
+
+Sampling is ordered by how much an item can affect an agent's actions: `command` · `setting` · `action` · `criterion` · `prerequisite` · `warning` · … · `concept`. A misread `command` is more dangerous in practice than a misread claim.
 
 This reduces confirmation bias from having the same model both write and approve its own answer.
 
 ### 5. Coverage audit
 
-A checklist of expected steps is built from captions and chapters before the final guide is compared against it. This catches omissions that claim-by-claim auditing cannot see.
+Coverage audit builds an **expected knowledge checklist** from the source (captions, chapters, description timestamps) and compares it against **`claims` and `knowledge_items` in `evidence.json`** — not against document headings.
+
+An adaptive `video.md` heading like `## Phase 1` says nothing about what it contains, and `evidence.json` is the canonical source anyway. So completeness is checked as `source → evidence` first, and `evidence → video.md` second.
 
 ---
 
@@ -399,6 +403,6 @@ If a tutorial breaks `tuto`, a public video URL and the missed timestamp are esp
 
 **If tuto saves you from scrubbing a video frame by frame, consider giving the repo a ⭐.**
 
-<sub>Built as a Claude Code plugin · 160 tests passing</sub>
+<sub>Built as a Claude Code plugin · 199 tests passing</sub>
 
 </div>

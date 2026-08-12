@@ -4,7 +4,7 @@
 
 1. **결정론적 골격만 파이썬이 만든다.** 비디오 메타·자막 세그먼트·프레임 provenance·신호
    요약은 계산 가능하므로 여기서 만들고, 시각 증거(visual_evidence)와 주장(claims)은
-   화면을 본 LLM이 판독해 병합한다. 산문 렌더링(guide.md / insight.md)은 이 모듈의
+   화면을 본 LLM이 판독해 병합한다. 산문 렌더링(video.md)은 이 모듈의
    책임이 아니다 — 파이썬은 문장을 쓰지 않는다.
 
 2. **transcript 증거와 visual 증거를 구조로 분리한다.** `segments[].transcript`는 자막이고
@@ -41,6 +41,14 @@ EVIDENCE_SOURCES = ("transcript", "frame")
 KNOWLEDGE_TYPES = ("concept", "procedure", "action", "command", "setting",
                    "prerequisite", "result", "criterion", "warning",
                    "example", "comparison")
+
+# 표본 감사 우선순위 — **호출한 에이전트의 행동에 영향을 주는 정도** 순이다.
+# 잘못 판독된 `command`("pip install package-x")나 `setting`("CUDA 12.6")은 단순 주장
+# 오류보다 실전에서 훨씬 위험하다. 영상 유형별 고정 비율은 만들지 않는다 — 존재하는
+# 항목 중에서만 이 순서로 뽑는다(개념 영상이면 자연히 claim/concept이 올라온다).
+AUDIT_PRIORITY = ("command", "setting", "action", "criterion", "prerequisite",
+                  "warning", "procedure", "result", "comparison",
+                  "claim", "concept", "example")
 
 
 def evidence_path(cache_dir) -> Path:
@@ -193,6 +201,24 @@ def register_frames(ev: dict, frames: list, bucket: str = "zoom") -> dict:
     return ev
 
 
+def knowledge_digest(ev: dict) -> list:
+    """커버리지 감사가 대조할 **evidence의 실제 지식 목록**.
+
+    커버리지 감사의 심판 대상은 `video.md`의 섹션 제목이 아니다 — adaptive 문서는
+    "## Phase 1" 같은 제목만으로 내부에 무엇이 들어갔는지 알 수 없다. 정본인
+    evidence.json의 claims + knowledge_items를 대조해야 **evidence 자체의 누락**을 잡는다.
+
+    순서: 소스 → evidence completeness → (그다음) evidence → video.md rendering."""
+    out = []
+    for k in ev.get("knowledge_items") or []:
+        if isinstance(k, dict) and k.get("content"):
+            out.append(f"[{k.get('type', '?')}] {k['content']}")
+    for c in ev.get("claims") or []:
+        if isinstance(c, dict) and c.get("claim"):
+            out.append(f"[claim] {c['claim']}")
+    return out
+
+
 def load(cache_dir) -> dict:
     return json.loads(evidence_path(cache_dir).read_text(encoding="utf-8"))
 
@@ -225,6 +251,7 @@ def merge(ev: dict, patch: dict) -> dict:
     for item in patch.get("knowledge_items") or []:
         item = dict(item)
         item.setdefault("id", _next_id(ev.setdefault("knowledge_items", []), "k"))
+        item.setdefault("verification", {"status": "unaudited"})
         ev["knowledge_items"].append(item)
     for g in patch.get("gaps") or []:
         # 형식이 어긋나도 여기서 죽지 않는다 — 그대로 실어 보내고 validate가 잡는다.
@@ -244,18 +271,60 @@ def merge(ev: dict, patch: dict) -> dict:
     return ev
 
 
+def _audit_index(ev: dict) -> dict:
+    """감사 대상 id → 항목. claims와 knowledge_items를 한 네임스페이스로 본다
+    (`c*`/`k*` 접두사가 이미 서로 구분해 준다)."""
+    idx = {}
+    for coll in ("claims", "knowledge_items"):
+        for item in ev.get(coll) or []:
+            if isinstance(item, dict) and item.get("id"):
+                idx[item["id"]] = item
+    return idx
+
+
 def apply_verdicts(ev: dict, verdicts: list) -> dict:
-    """감사 판정을 claim id 기준으로 반영한다. 대응 claim이 없으면 조용히 넘기지 않고
-    flags에 남긴다 — 감사 결과가 유실되면 unaudited가 verified처럼 보일 수 있다."""
-    by_id = {c.get("id"): c for c in ev.get("claims") or []}
+    """감사 판정을 반영한다. **claims와 knowledge_items 양쪽**을 대상으로 한다.
+
+    대응 항목이 없으면 조용히 넘기지 않고 flags에 남긴다 — 감사 결과가 유실되면
+    unaudited가 verified처럼 보일 수 있다.
+    `claim_id`는 구 형식 호환용이고 새 형식은 `id`다."""
+    idx = _audit_index(ev)
     for v in verdicts:
-        cid = v.get("claim_id")
-        c = by_id.get(cid)
-        if c is None:
-            ev["flags"].append(f"verdict_orphan: {cid}")
+        vid = v.get("id") or v.get("claim_id") or v.get("item_id")
+        target = idx.get(vid)
+        if target is None:
+            ev.setdefault("flags", []).append(f"verdict_orphan: {vid}")
             continue
-        c["verification"] = {k: v[k] for k in ("status", "auditor", "note") if k in v}
+        target["verification"] = {k: v[k] for k in ("status", "auditor", "note") if k in v}
     return ev
+
+
+def audit_candidates(ev: dict, limit: int = 6) -> list:
+    """표본 감사 후보를 뽑는다 — claims와 knowledge_items 통합.
+
+    **모든 항목을 감사하지 않는다.** 표본 감사 원칙을 유지하되, 호출한 에이전트의
+    행동에 영향을 크게 주는 항목(command/setting/action/criterion…)을 먼저 뽑는다.
+    이미 감사된(unaudited가 아닌) 항목은 제외한다."""
+    rank = {t: i for i, t in enumerate(AUDIT_PRIORITY)}
+    pool = []
+    for k in ev.get("knowledge_items") or []:
+        if not isinstance(k, dict):
+            continue
+        if (k.get("verification") or {}).get("status", "unaudited") != "unaudited":
+            continue
+        pool.append({"kind": "knowledge_item", "id": k.get("id"), "type": k.get("type"),
+                     "content": k.get("content", ""), "timestamp": k.get("timestamp"),
+                     "evidence": k.get("evidence") or []})
+    for c in ev.get("claims") or []:
+        if not isinstance(c, dict):
+            continue
+        if (c.get("verification") or {}).get("status", "unaudited") != "unaudited":
+            continue
+        pool.append({"kind": "claim", "id": c.get("id"), "type": "claim",
+                     "content": c.get("claim", ""), "timestamp": c.get("timestamp"),
+                     "evidence": c.get("evidence") or []})
+    pool.sort(key=lambda x: (rank.get(x["type"], len(rank)), str(x["id"])))
+    return pool[:limit]
 
 
 def _known_frames(ev: dict) -> set:
@@ -366,6 +435,10 @@ def validate(ev: dict) -> list:
             errs.append(f"knowledge_items[{kid}].content: empty")
         _check_evidence_refs("knowledge_items", kid, k.get("evidence") or [],
                              ve_ids, n_segments, errs)
+        kst = (k.get("verification") or {}).get("status")
+        if kst is not None and kst not in VERIFY_STATUS:
+            errs.append(f"knowledge_items[{kid}].verification.status: unknown value "
+                        f"{kst!r} (allowed: {VERIFY_STATUS})")
     return errs
 
 
@@ -391,6 +464,10 @@ def main() -> int:
     ap.add_argument("--add-frames", dest="add_frames",
                     help="확대 프레임 등록 — zoom.py 출력을 담은 파일 경로 (FRAME 줄 파싱)")
     ap.add_argument("--validate", action="store_true")
+    ap.add_argument("--audit-candidates", dest="audit_candidates", type=int, metavar="N",
+                    help="표본 감사 후보 N건 출력 (행동 영향도 높은 순, 미감사 항목만)")
+    ap.add_argument("--digest", action="store_true",
+                    help="커버리지 감사용 지식 목록 출력 (claims + knowledge_items)")
     ap.add_argument("--summary", action="store_true")
     args = ap.parse_args()
 
@@ -426,6 +503,13 @@ def main() -> int:
 
     if args.summary:
         print(summary_line(ev))
+    if args.digest:
+        for line in knowledge_digest(ev):
+            print(line)
+    if args.audit_candidates:
+        for c in audit_candidates(ev, limit=args.audit_candidates):
+            refs = " ".join(f"{e.get('source')}:{e.get('ref')}" for e in c["evidence"])
+            print(f"{c['id']}	{c['kind']}	{c['type']}	{refs}	{c['content']}")
     if args.validate:
         errs = validate(ev)
         if errs:
