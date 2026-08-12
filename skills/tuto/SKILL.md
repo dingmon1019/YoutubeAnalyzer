@@ -17,11 +17,32 @@ user-invocable: true
 - `evidence.json` — 기계가 읽는 정본. 무엇이 말해졌고 무엇이 화면에 있었는가.
 - `video.md` — 사람이 읽는 문서. 영상 구조에 맞춰 **자율 구성**한다.
 
-**하지 않는 일:** 사용자의 자연어 요청을 수행하는 것. 설명·비교·적용·코드 수정·실행은
-**이 스킬을 호출한 에이전트**가 사용자 요청에 따라 결정한다.
+**분석 책임의 끝:** `evidence.json`과 `video.md` 생성까지다. 설명·비교·적용·코드 수정·실행
+같은 판단은 이 스킬이 정의하지 않는다.
 
 > YoutubeAnalyzer = eyes + video understanding
 > Calling agent = reasoning + hands
+
+### 자연어 요청이 함께 왔으면 분석에서 멈추지 않는다
+
+**`/tuto <url> <요청>`은 하나의 요청이다.** 분석이 끝났다고 "분석 완료"로 응답을 종료하면
+안 된다. 지금 실행 중인 에이전트가 **방금 만든 `evidence.json`·`video.md`를 새 신뢰
+컨텍스트로 삼아 원래 요청을 이어서 수행한다.**
+
+사용자가 "이제 적용해줘"라고 **다시 말해야 하는 구조를 만들지 않는다.**
+
+| 요청 | 분석 후 이어서 하는 일 |
+|---|---|
+| "설명해줘" | evidence 기반으로 설명 |
+| "우리 프로젝트와 비교해줘" | 현재 프로젝트를 읽고 비교 |
+| "적용할 부분 찾아줘" | 프로젝트 ↔ 영상 지식 대조 후 적용점 제시 |
+| "현재 프로젝트에 적용해줘" | 프로젝트 조사 → 계획 → 수정 → 테스트 → 보고 |
+| "그대로 실행해줘" | 환경·호환성·안전 확인 → 실행 → 결과 검증 (§실행형 요청 참조) |
+| "설정값만 뽑아줘" | evidence의 `setting`·`command` 중심으로 응답 |
+
+**새 모드를 만들지 않는다.** `COMPARE`·`APPLY`·`EXECUTE` 같은 것은 없다 — 자연어 요청을
+지금 에이전트가 그대로 이어서 처리할 뿐이다. 분석 파이프라인(§0~§6)은 요청이 무엇이든
+동일하게 돈다.
 
 **사용자 요청은 분석 깊이를 바꾸지 않는다.** "핵심만 알려줘"라고 해도 영상을 얕게 보지
 않는다 — 사용자는 영상을 직접 보지 않으므로 **무엇을 놓쳤는지 검증할 수 없다.** 요청은
@@ -313,40 +334,105 @@ python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --merge "<cache_dir>/evid
 
 ## 5. 표본 감사 (Agent 서브에이전트, 독립 컨텍스트)
 
-빌더가 반환한 후보(6건, 미만이면 전부)를 사용하되, 후보가 §5 규칙에 어긋나면 오케스트레이터가 직접 재표집한다 — 화면에 서식·상태변화(볼드/색상/토글/활성화/밑줄 주석)가 있는 영상에서는 그 범주 주장을 최소 1건 포함해야 하기 때문이다. 산출물에 해당 범주의 주장이 하나도 없으면 생략하고 스탬프에 '서식변화 주장
-없음'을 명시한다. **video.md 본문은 주지 않고** 주장 하나와 근거 프레임만 독립된 Agent
-서브에이전트에 보낸다.
+**감사 대상은 `claims`만이 아니라 `knowledge_items`까지다.** v0.3에서 호출한 에이전트가
+실제 작업에 쓰는 정보는 대부분 `knowledge_items`에 들어간다 — 잘못 판독된
+`command: pip install package-x`나 `setting: CUDA 12.6`, `criterion: Connected면 성공`은
+단순 주장 오류보다 **실행에서 훨씬 위험하다.**
+
+후보는 손으로 고르지 말고 스크립트로 뽑는다:
+
+```
+python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --audit-candidates 6
+```
+
+`id·kind·type·근거·내용`이 탭 구분으로 나온다. 정렬은 **행동 영향도 순**이다 —
+`command` `setting` `action` `criterion` `prerequisite` `warning` `procedure` `result`
+`comparison` `claim` `concept` `example`. **이미 감사된 항목은 빠진다.**
+
+영상 유형별 고정 비율은 없다. 존재하는 항목 중에서만 뽑히므로 개념·강의 영상이면
+자연히 `claim`·`concept`·`comparison`이 올라오고, 튜토리얼이면 `command`·`setting`이 앞선다.
+
+**모든 항목을 감사하지 않는다.** 표본 감사 원칙을 유지한다 — 목적은 비용을 폭증시키지
+않으면서 행동에 영향을 주는 지식에 오류가 없는지 독립 확인하는 것이다.
+
+화면에 서식·상태변화(볼드/색상/토글/활성화/밑줄 주석)가 있는 영상이면 그 범주 항목을 최소
+1건 포함한다. 해당 범주가 아예 없으면 생략하고 스탬프에 '서식변화 주장 없음'을 명시한다.
+
+**`video.md` 본문은 주지 않고** 항목 하나와 근거만 독립된 Agent 서브에이전트에 보낸다.
 
 감사 에이전트는 **`model: "sonnet"`으로 실행**한다. 판정이 MATCH면 그대로 채택하고,
 **MISMATCH 또는 UNVERIFIABLE이면 그 주장만 기본(세션) 모델의 Agent로 같은 프롬프트를
 재검**해 재검 결과를 최종 판정으로 삼는다 (비용 절감 레버 — 불확실성은 전부 상위
 모델로 올라가므로 잔여 리스크는 오수용뿐이며, 이는 오류 주입 시험으로 게이트한다):
 
-> "주장: <스텝 텍스트 1개>. 근거 프레임: <frame 경로>. 이 프레임을 Read하고 주장을 반박하라.
-> 판독이 어려우면 ffmpeg로 해당 영역을 크롭·확대해 다시 Read하라 (임시 파일은 시스템 임시
-> 디렉토리에 주장별 고유 파일명으로 — 병렬 감사끼리 crop.png 따위 공용 이름을 쓰면 서로 덮어쓴다). 그래도 판정 불가면 UNVERIFIABLE."
+> "대상 항목: <type> — <content 또는 claim 1문장>
+> 근거: <visual_evidence id + frame 파일명> 또는 <transcript 세그먼트 인덱스 + 인용>
+> 이 근거를 직접 확인하고 위 항목을 **반박하라.**
+> 프레임 판독이 어려우면 ffmpeg로 해당 영역을 크롭·확대해 다시 Read하라 (임시 파일은 시스템
+> 임시 디렉토리에 **항목별 고유 파일명**으로 — 병렬 감사끼리 crop.png 따위 공용 이름을 쓰면
+> 서로 덮어쓴다). 그래도 판정 불가면 UNVERIFIABLE."
 
-불일치로 판정된 주장은 `video.md` 본문을 수정하거나 `⚠️` 표기로 강등하고, `--verdicts`로 evidence.json에도 반영한다.
+근거가 `transcript`뿐인 항목이면 프레임 대신 **해당 세그먼트 원문**을 준다. 화면 근거가
+없다는 사실 자체가 감사 대상이다 — "화면에서 확인했다"고 쓰였는데 근거가 자막뿐이면 MISMATCH다.
 
-**커버리지 감사(누락 검출, 1건):** 별도 Sonnet Agent에 자막 전문·챕터·DESC_TIMESTAMPS와
-**video.md의 섹션 제목 목록만** 보낸다(본문 비공개):
+불일치로 판정된 항목은 `video.md` 본문을 수정하거나 `⚠️` 표기로 강등하고, `--verdicts`로 evidence.json에도 반영한다.
 
-> "아래 소스에서 **기대 항목 체크리스트**를 먼저 만들어라 — 이 영상을 보지 않은 사람이
-> 알아야 할 것(절차·개념·주장·수치·주의사항 중 이 영상에 실제로 있는 것)이다. 그런 다음 아래 목록과 대조해
-> 체크리스트에는 있으나 산출물에 없는 항목만
-> `- [MM:SS] <내용> — 근거: <자막 인용>` 형식으로 반환하라. 없으면 'none'."
+**커버리지 감사(누락 검출, 1건) — 심판 대상은 `video.md` 제목이 아니라 `evidence.json`이다.**
 
-반환된 누락 후보는 프레임·자막으로 직접 확인해 **명백한 누락이면 video.md와 evidence.json에
-보강(1회 한정)**하고, 불확실하면 "누락 후보" 절에 기재한다. 재분석 루프는 돌지 않는다.
+adaptive 문서에서 `## Phase 1`·`## 핵심 개념` 같은 제목만으로는 **안에 무엇이 들어갔는지 알 수
+없다.** 그리고 정본은 evidence.json이고 video.md는 그것의 렌더링이므로, **evidence 자체의
+completeness를 먼저** 검사해야 한다.
+
+```
+소스(자막·챕터·DESC_TIMESTAMPS·관측된 시각 근거)
+        ↓
+기대 지식 체크리스트
+        ↓  대조
+evidence.json의 claims[].claim + knowledge_items[].content
+        ↓
+누락 후보
+```
+
+대조 대상 목록은 스크립트로 뽑는다 (`[type] content` 한 줄씩):
+
+```
+python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --digest
+```
+
+별도 Sonnet Agent에 **자막 전문·챕터·DESC_TIMESTAMPS + `--digest` 출력**을 보낸다
+(video.md 본문·제목은 주지 않는다):
+
+> "아래 소스에서 **기대 지식 체크리스트**를 먼저 만들어라 — 이 영상을 보지 않은 에이전트가
+> 작업하거나 설명하려면 알아야 할 것이다. 범주는 영상에 실제로 있는 것만 쓴다:
+> concept · claim · procedure · action · command · setting · prerequisite · result ·
+> criterion · warning · example · comparison · 중요 수치.
+> **빈 범주를 억지로 만들지 마라** — 인터뷰에 command가 없는 건 정상이다.
+> 그런 다음 아래 `[type] content` 목록과 대조해, 체크리스트에는 있으나 목록에 없는 항목만
+> `- [MM:SS] [type] <내용> — 근거: <자막 인용>` 형식으로 반환하라. 없으면 'none'."
+
+반환된 누락 후보는 **바로 추가하지 않는다.** 자막·프레임 근거로 재확인한 뒤:
+- **명백한 누락** → `evidence.py --merge`로 evidence.json에 보강하고 `video.md`에도 반영 (1회 한정)
+- **불확실** → `video.md`의 "누락 후보" 절에 기재하고 evidence는 건드리지 않는다
+
+재분석 전체 루프는 돌지 않는다. 필요하면 targeted `zoom.py --timestamps`/`--crop`만 쓴다.
+
+**video.md 렌더링 누락은 그다음이다.** evidence가 채워진 뒤, evidence의 핵심 항목이
+video.md에 실제로 반영됐는지 확인한다. 순서를 뒤집지 않는다 —
+`소스 → evidence` 먼저, `evidence → video.md` 나중.
+
 STATUS flags에 자막 없음(no transcript available)이 있으면 커버리지 감사는 스킵하고 스탬프에
 명시한다 — 체크리스트 원천이 없다.
 
 **감사 판정을 evidence.json에 반영한다.** `<cache_dir>/verdicts.json`으로 모아:
 
 ```json
-[{"claim_id": "c1", "status": "verified", "auditor": "sonnet", "note": "..."},
- {"claim_id": "c4", "status": "disputed", "auditor": "escalated", "note": "..."}]
+[{"id": "k1", "status": "verified", "auditor": "sonnet", "note": "프레임에서 값 대조"},
+ {"id": "c4", "status": "disputed", "auditor": "escalated", "note": "..."}]
 ```
+
+`id`는 `claims`와 `knowledge_items`를 **같은 네임스페이스**로 본다(`c*`/`k*` 접두사가 구분).
+대응 항목이 없으면 `verdict_orphan` flag로 남는다 — 판정이 조용히 유실되지 않는다.
+(구 형식 `claim_id`도 계속 읽는다.)
 ```
 python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --verdicts "<cache_dir>/verdicts.json"
 ```
@@ -374,8 +460,12 @@ video.md 섹션을 직접 대조해, 설명란에는 있지만 산출물에는 �
 
 요약에는 영상유형·핵심 지식 몇 줄·감사 결과·`⚠️` 미확정 건수를 포함한다.
 
-**사용자가 자연어 요청을 함께 줬다면** 여기서 그 요청을 수행하지 말고, 수집한 지식을 근거로
-호출한 에이전트가 이어서 처리하게 한다. 이 스킬의 응답은 "무엇을 알아냈는가"까지다.
+**사용자가 자연어 요청을 함께 줬다면 여기서 응답을 끝내지 않는다.** 요약을 제시한 뒤
+**곧바로 그 요청을 이어서 수행한다** — `evidence.json`·`video.md`가 이제 신뢰할 수 있는
+컨텍스트이므로, 프로젝트를 읽든 코드를 고치든 그 지식을 근거로 진행한다.
+
+분석 요약과 요청 수행 사이에 사용자 확인을 요구하지 않는다(단, 파일 수정·명령 실행처럼
+승인이 필요한 행동은 평소의 안전 정책을 그대로 따른다).
 
 근거를 인용해 답할 때는 **transcript 근거와 visual 근거를 구분**하고, 확실하지 않은 부분은
 그렇게 밝힌다. 자막만 근거인 항목을 화면에서 확인한 것처럼 쓰지 않는다.
