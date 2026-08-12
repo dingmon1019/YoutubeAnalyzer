@@ -1,7 +1,7 @@
 {
   "name": "yta",
   "metadata": {
-    "description": "유튜브 튜토리얼을 따라 할 수 있는 문서로 바꾸는 플러그인 — /tuto가 화면에서 값을 직접 읽고 감사 에이전트가 검증한다."
+    "description": "유튜브 영상을 AI 에이전트가 추론에 쓸 수 있는 검증된 근거로 바꾼다 — 화면·슬라이드·UI·숫자까지 판독하고 감사한다."
   },
   "owner": {
     "name": "hwangjs"
@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "tuto",
-      "description": "유튜브 튜토리얼 영상(≤30분, 한/영)을 따라하기 스텝 가이드로 변환한다. 히트맵·챕터·활동곡선·자막 지시어를 가중해 프레임을 고르고, 자막이 아니라 화면에서 설정값·버튼명을 읽는다. 모든 주장은 독립 감사 에이전트의 반박 검증을 거친다.",
+      "description": "유튜브 영상을 AI 에이전트가 추론에 쓸 수 있는 검증된 근거로 바꾼다. 자막뿐 아니라 화면의 슬라이드·UI·표·차트·설정값·코드를 프레임에서 직접 판독하고, 독립 감사로 검증해 evidence.json으로 구조화한다. 따라하기 가이드(GUIDE)·핵심 주장과 수치 분석(INSIGHT)·질의응답(ASK) 세 모드.",
       "author": {
         "name": "hwangjs"
       },
@@ -18,9 +18,9 @@
       "category": "productivity",
       "keywords": [
         "youtube",
-        "tutorial",
-        "video-analysis",
-        "step-by-step-guide"
+        "video-understanding",
+        "evidence",
+        "ai-agents"
       ],
       "license": "MIT"
     }
