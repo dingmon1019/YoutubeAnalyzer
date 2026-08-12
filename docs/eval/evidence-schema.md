@@ -205,6 +205,40 @@ command > setting > action > criterion > prerequisite > warning
 프레임이 60초 이상 없는 구간. 이 구간의 주장은 화면 근거가 약하다는 뜻이다.
 실측 2건에서 영상의 결론부가 통째로 이 구간에 들어 있었다.
 
+### `visual-coverage.json` — evidence.json이 **아니다**
+
+§2 판독 에이전트가 지도 프레임을 읽는 김에 남기는 **존재 신호**다. 캐시 디렉토리의 별도
+산출물이며 `evidence.json`에 넣지 않는다.
+
+```json
+{"observations": [
+  {"timestamp": 203.0, "kind": "setting",
+   "observation": "설치 옵션 체크박스들이 보인다", "frame": "t0323d7_1024.jpg"}
+]}
+```
+
+**왜 evidence.json에 넣지 않는가:** 관측은 **검증되지 않은 존재 신호**다. 정본에 섞으면
+"근거"와 "힌트"의 경계가 무너진다. `visual_evidence`는 값을 판독한 결과이고 관측은
+"이 시점에 뭔가 있었다"는 표시일 뿐이다.
+
+**왜 빌더가 만들지 않는가:** 같은 LLM이 "무엇을 추출할지"와 "무엇이 빠졌는지"를 둘 다
+정하면 독립성이 없다. 판독 에이전트가 관측하고, 빌더가 추출하고, 커버리지 감사가 대조한다.
+
+**왜 추가 비용이 없는가:** 판독 에이전트는 이미 지도 프레임을 전부 읽고 있다. 두 번째
+vision pass를 만들지 않는다.
+
+`kind`는 `KNOWLEDGE_TYPES + ("numeric", "other")` — 새 온톨로지를 만들지 않고 커버리지
+대조가 `kind ↔ knowledge type`으로 직접 이어지게 했다.
+
+검증: `validate_observations(obs, ev)` — kind 열거형 · `observation` 비어 있지 않음 ·
+`timestamp` 숫자 · `frame`이 `provenance.frames`에 실재.
+
+대조: `uncovered_observations(ev, obs, window=45.0)` — 관측 ±45초 안에 **같은 kind의**
+지식이 없으면 후보. `numeric`·`other`는 kind 무관 매칭(과잉 후보 방지).
+**힌트지 판정이 아니다** — 최종 판단은 커버리지 감사 에이전트가 원본으로 재확인해 내린다.
+
+---
+
 ---
 
 ## 불변식 (validate가 강제)
@@ -238,6 +272,8 @@ python skills/tuto/scripts/evidence.py <cache_dir> --summary
 python skills/tuto/scripts/evidence.py <cache_dir> --merge patch.json
 python skills/tuto/scripts/evidence.py <cache_dir> --verdicts verdicts.json
 python skills/tuto/scripts/evidence.py <cache_dir> --validate
+python skills/tuto/scripts/evidence.py <cache_dir> --audit-candidates 6
+python skills/tuto/scripts/evidence.py <cache_dir> --coverage-input
 ```
 
 `--merge`·`--verdicts`는 **원자적이다** — 사본에 적용해 검증하고, 통과할 때만 저장한다.

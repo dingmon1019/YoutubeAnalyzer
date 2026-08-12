@@ -50,6 +50,11 @@ AUDIT_PRIORITY = ("command", "setting", "action", "criterion", "prerequisite",
                   "warning", "procedure", "result", "comparison",
                   "claim", "concept", "example")
 
+# 시각 관측(visual-coverage.json)의 kind. 새 온톨로지를 만들지 않고 KNOWLEDGE_TYPES를
+# 재사용해 커버리지 대조가 `kind ↔ knowledge type`으로 직접 이어지게 한다.
+# `numeric`은 "수치가 화면에 보인다"는 신호, `other`는 분류 애매한 경우.
+OBSERVATION_KINDS = KNOWLEDGE_TYPES + ("numeric", "other")
+
 
 def evidence_path(cache_dir) -> Path:
     return Path(cache_dir) / "evidence.json"
@@ -217,6 +222,120 @@ def knowledge_digest(ev: dict) -> list:
         if isinstance(c, dict) and c.get("claim"):
             out.append(f"[claim] {c['claim']}")
     return out
+
+
+def observations_path(cache_dir) -> Path:
+    return Path(cache_dir) / "visual-coverage.json"
+
+
+def load_observations(cache_dir) -> list:
+    """§2 판독 에이전트가 남긴 시각 관측. 없으면 빈 리스트."""
+    p = observations_path(cache_dir)
+    if not p.exists():
+        return []
+    data = json.loads(p.read_text(encoding="utf-8"))
+    return data.get("observations", []) if isinstance(data, dict) else (data or [])
+
+
+def validate_observations(obs: list, ev: dict) -> list:
+    """시각 관측의 스키마·provenance를 검사한다.
+
+    관측은 **검증되지 않은 존재 신호**다 — 정확한 값의 정본이 아니다. 그래서 evidence.json에
+    섞지 않고 별도 산출물로 두지만, 프레임 provenance만큼은 evidence와 같은 기준으로 본다.
+    없는 프레임을 가리키는 관측은 커버리지 후보를 헛되이 만들어낸다."""
+    errs = []
+    known = _known_frames(ev)
+    for i, o in enumerate(obs or []):
+        if not isinstance(o, dict):
+            errs.append(f"observations[{i}]: 객체여야 한다, got {type(o).__name__}")
+            continue
+        if o.get("kind") not in OBSERVATION_KINDS:
+            errs.append(f"observations[{i}].kind: unknown value {o.get('kind')!r} "
+                        f"(allowed: {OBSERVATION_KINDS})")
+        if not str(o.get("observation") or "").strip():
+            errs.append(f"observations[{i}].observation: empty")
+        try:
+            float(o.get("timestamp"))
+        except (TypeError, ValueError):
+            errs.append(f"observations[{i}].timestamp: 숫자여야 한다, got {o.get('timestamp')!r}")
+        frame = o.get("frame")
+        if not frame:
+            errs.append(f"observations[{i}].frame: missing frame provenance")
+        elif known and frame not in known:
+            errs.append(f"observations[{i}].frame: {frame!r} not in provenance.frames")
+    return errs
+
+
+def _knowledge_points(ev: dict) -> list:
+    """(type, timestamp) 목록 — 관측 대조용. claims는 type을 'claim'으로 본다."""
+    pts = []
+    for k in ev.get("knowledge_items") or []:
+        if isinstance(k, dict):
+            try:
+                pts.append((k.get("type"), float(k.get("timestamp"))))
+            except (TypeError, ValueError):
+                pass
+    for c in ev.get("claims") or []:
+        if isinstance(c, dict):
+            try:
+                pts.append(("claim", float(c.get("timestamp"))))
+            except (TypeError, ValueError):
+                pass
+    return pts
+
+
+def uncovered_observations(ev: dict, obs: list, window: float = 45.0) -> list:
+    """evidence가 통째로 놓친 것으로 **의심되는** 시각 관측을 고른다.
+
+    이 프로젝트의 핵심 차별점은 자막에 없고 화면에만 있는 정보를 읽는 것이다. 그런데
+    빌더가 그걸 놓치면 자막 기반 커버리지 감사도 **존재 자체를 모른다** — 그게 사각지대다.
+
+    규칙: 관측 시각 ±window초 안에 **같은 kind의** knowledge_item(또는 claim)이 없으면 후보.
+    `numeric`·`other`는 kind가 특정되지 않으므로 아무 항목이나 근처에 있으면 covered로 본다
+    (과잉 후보 방지).
+
+    **이건 힌트지 판정이 아니다.** 최종 판단은 커버리지 감사 에이전트가 원본 프레임·자막으로
+    재확인해서 내린다."""
+    pts = _knowledge_points(ev)
+    out = []
+    for o in obs or []:
+        if not isinstance(o, dict):
+            continue
+        try:
+            t = float(o.get("timestamp"))
+        except (TypeError, ValueError):
+            continue
+        kind = o.get("kind")
+        loose = kind in ("numeric", "other")
+        hit = any(abs(pt - t) <= window and (loose or ptype == kind) for ptype, pt in pts)
+        if not hit:
+            out.append(o)
+    return out
+
+
+def coverage_input(ev: dict, obs: list, window: float = 45.0) -> str:
+    """커버리지 감사 에이전트에게 줄 대조 블록."""
+    lines = ["== EVIDENCE DIGEST =="]
+    lines += knowledge_digest(ev) or ["(비어 있음)"]
+    lines.append("")
+    lines.append("== VISUAL OBSERVATIONS (존재 신호 — 값의 정본이 아니다) ==")
+    if obs:
+        for o in obs:
+            if isinstance(o, dict):
+                lines.append(f"[{common.fmt_ts(float(o.get('timestamp', 0)))}] "
+                             f"{o.get('kind')} — {o.get('observation')} ({o.get('frame')})")
+    else:
+        lines.append("(없음)")
+    unc = uncovered_observations(ev, obs, window)
+    lines.append("")
+    lines.append(f"== 결정론적 사전 필터: 근처(±{window:.0f}s)에 같은 kind가 없는 관측 ==")
+    if unc:
+        for o in unc:
+            lines.append(f"[{common.fmt_ts(float(o.get('timestamp', 0)))}] "
+                         f"{o.get('kind')} — {o.get('observation')} ({o.get('frame')})")
+    else:
+        lines.append("(없음)")
+    return "\n".join(lines)
 
 
 def load(cache_dir) -> dict:
@@ -466,6 +585,9 @@ def main() -> int:
     ap.add_argument("--validate", action="store_true")
     ap.add_argument("--audit-candidates", dest="audit_candidates", type=int, metavar="N",
                     help="표본 감사 후보 N건 출력 (행동 영향도 높은 순, 미감사 항목만)")
+    ap.add_argument("--coverage-input", dest="coverage_input", metavar="OBS_JSON",
+                    nargs="?", const="", help="커버리지 감사 입력 출력 "
+                    "(digest + 시각 관측 + 사전 필터). 경로 생략 시 캐시의 visual-coverage.json")
     ap.add_argument("--digest", action="store_true",
                     help="커버리지 감사용 지식 목록 출력 (claims + knowledge_items)")
     ap.add_argument("--summary", action="store_true")
@@ -506,6 +628,15 @@ def main() -> int:
     if args.digest:
         for line in knowledge_digest(ev):
             print(line)
+    if args.coverage_input is not None:
+        obs = (json.loads(Path(args.coverage_input).read_text(encoding="utf-8")).get("observations", [])
+               if args.coverage_input else load_observations(cd))
+        oerrs = validate_observations(obs, ev)
+        if oerrs:
+            for e in oerrs:
+                print(f"INVALID: {e}", file=sys.stderr)
+            return 2
+        print(coverage_input(ev, obs))
     if args.audit_candidates:
         for c in audit_candidates(ev, limit=args.audit_candidates):
             refs = " ".join(f"{e.get('source')}:{e.get('ref')}" for e in c["evidence"])

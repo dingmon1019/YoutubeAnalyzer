@@ -11,9 +11,9 @@ Turn YouTube videos into **verified working knowledge** for AI agents — transc
 AI가 대신 영상을 보고, 자막과 화면을 함께 이해하고, 검증된 지식으로 변환합니다.
 이후 AI는 그 내용을 설명하거나 질문에 답하고, 현재 작업과 비교하거나 튜토리얼을 따라 할 수 있습니다.
 
-[![Version](https://img.shields.io/badge/version-0.3.1-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
+[![Version](https://img.shields.io/badge/version-0.3.2-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-199%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-223%20passed-brightgreen.svg)](tests/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://claude.com/claude-code)
 [![Languages](https://img.shields.io/badge/video-KO%20%7C%20EN-orange.svg)](#)
 
@@ -99,6 +99,7 @@ If a value cannot be read safely, `tuto` emits `⚠️ needs visual check` inste
   "segments":         [ { "idx", "start", "end", "transcript" } ],
   "visual_evidence":  [ { "id", "type", "value", "timestamp", "frame", "confidence" } ],
   "claims":           [ { "id", "claim", "evidence", "conflict", "verification" } ],
+  "knowledge_items":  [ { "id", "type", "content", "timestamp", "evidence", "verification" } ],
   "gaps":             [ { "start", "end", "reason" } ],
   "flags":            [ ... ]
 }
@@ -221,14 +222,14 @@ These are measured golden-set and regression-run results, not marketing estimate
 | Metric | Result | Meaning |
 |---|:---:|---|
 | **Hallucinated values** | **0** | Precision **1.000** on the golden set |
-| **Step recall (R1)** | **0.913** | 21 / 23 expected knowledge items recovered |
+| **Tutorial step recall (R1)** | **0.913** | 21 / 23 expected steps recovered on the tutorial golden set |
 | **Value F1** | **0.909** | Settings, labels, and numeric values |
 | **Orchestrator image cost** | **−95%** | `cache_write` 432,788 → 21,594 |
 | **Total pipeline cost** | **−27%** | 3.35M → 2.44M tokens on a 19-minute video |
 | **Download + analysis** | **8.1× faster** | 154s → 19s |
 | **Zoom extraction** | **5.4× faster** | 327s → 61s |
 | **Audit escalation** | **0%** | On the selected audit model |
-| **Tests** | **199 passing** | Current regression suite |
+| **Tests** | **223 passing** | Current regression suite |
 
 See [`docs/eval/`](docs/eval/) for the evaluation protocol and cost-accounting tool.
 
@@ -244,8 +245,8 @@ analyze.py       reading agent    builder           sample audits ×6  builder
 ├ captions       ├ caption cues   ├ crop + re-read  ├ "try to refute"   questions
 ├ heatmap        ├ chapter bounds ├ visual_evidence ├ escalate        ├ outline chosen
 ├ chapters       ├ activity cover ├ claims          └ coverage audit    per video
-├ activity peaks └ gap detection  └ knowledge_items        ↓          └ video.md
-└ map frames                             ↓            --verdicts
+├ activity peaks ├ gap detection  └ knowledge_items        ↓          └ video.md
+└ map frames     └ visual-coverage.json      ↓            --verdicts
                                    evidence.json ←─────────┘
 ```
 
@@ -276,9 +277,13 @@ This reduces confirmation bias from having the same model both write and approve
 
 ### 5. Coverage audit
 
-Coverage audit builds an **expected knowledge checklist** from the source (captions, chapters, description timestamps) and compares it against **`claims` and `knowledge_items` in `evidence.json`** — not against document headings.
+Coverage audit builds an **expected knowledge checklist** from the source and compares it against **`claims` and `knowledge_items` in `evidence.json`** — not against document headings.
 
 An adaptive `video.md` heading like `## Phase 1` says nothing about what it contains, and `evidence.json` is the canonical source anyway. So completeness is checked as `source → evidence` first, and `evidence → video.md` second.
+
+**The source includes independent visual observations.** Values that appear only on screen and are never spoken are this project's whole point — but if the builder misses one, a captions-only coverage check cannot even know it existed. So the reading agent, which is **already looking at the map frames**, also records lightweight existence signals (`visual-coverage.json`): *"a terminal command is visible here"*, *"installer options are visible here"*.
+
+This costs **no additional image reads** and keeps the roles separate — the reading agent observes, the builder extracts, the coverage agent compares. Observations are existence signals, never the source of truth for a value.
 
 ---
 
@@ -357,7 +362,7 @@ See [`docs/eval/golden-set-protocol.md`](docs/eval/golden-set-protocol.md).
 
 ## Cache management
 
-Artifacts are stored in `~/.yta/cache/<video_id>/`. When `CACHE_MAX_VIDEOS` is exceeded, the oldest cached `video.mp4` and `audio.mp3` files are removed while metadata and guides are preserved.
+Artifacts are stored in `~/.yta/cache/<video_id>/`. When `CACHE_MAX_VIDEOS` is exceeded, the oldest cached `video.mp4` and `audio.mp3` files are removed while metadata, `evidence.json`, and `video.md` are preserved.
 
 Run cleanup manually with:
 
@@ -403,6 +408,6 @@ If a tutorial breaks `tuto`, a public video URL and the missed timestamp are esp
 
 **If tuto saves you from scrubbing a video frame by frame, consider giving the repo a ⭐.**
 
-<sub>Built as a Claude Code plugin · 199 tests passing</sub>
+<sub>Built as a Claude Code plugin · 223 tests passing</sub>
 
 </div>
