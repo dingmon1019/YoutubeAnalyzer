@@ -215,6 +215,7 @@ def test_validate_rejects_unknown_verification_status():
 def test_validate_accepts_split_transcript_and_frame_evidence():
     """양쪽 근거는 두 항목으로 나눠 적으면 통과한다."""
     ev = evidence.merge(_skel(), {
+        "zoom_frames": ["t0212_1024.jpg"],
         "visual_evidence": [{"type": "chart", "value": "16.3x", "timestamp": 132.0,
                              "frame": "t0212_1024.jpg", "confidence": "high"}],
         "claims": [{"claim": "16.3배", "timestamp": 132.0,
@@ -277,9 +278,11 @@ def test_cli_validate_exit_two_and_prints_errors(tmp_path):
 def test_cli_merge_applies_patch(tmp_path):
     evidence.save(tmp_path, _skel())
     patch = tmp_path / "patch.json"
-    patch.write_text(json.dumps({"visual_evidence": [
-        {"type": "chart", "value": "16.3x", "timestamp": 132.0,
-         "frame": "t0212_1024.jpg", "confidence": "high"}]}), encoding="utf-8")
+    patch.write_text(json.dumps({
+        "zoom_frames": ["t0212_1024.jpg"],
+        "visual_evidence": [
+            {"type": "chart", "value": "16.3x", "timestamp": 132.0,
+             "frame": "t0212_1024.jpg", "confidence": "high"}]}), encoding="utf-8")
     p = _run([str(tmp_path), "--merge", str(patch)])
     assert p.returncode == 0, p.stderr
     assert evidence.load(tmp_path)["visual_evidence"][0]["value"] == "16.3x"
@@ -337,9 +340,11 @@ def test_cli_merge_persists_valid_patch(tmp_path):
     """정상 patch는 그대로 저장된다 (원자성 수정이 정상 경로를 막지 않는지)."""
     evidence.save(tmp_path, _skel())
     patch = tmp_path / "ok.json"
-    patch.write_text(json.dumps({"visual_evidence": [
-        {"type": "chart", "value": "16.3x", "timestamp": 132.0,
-         "frame": "t0212_1024.jpg", "confidence": "high"}]}), encoding="utf-8")
+    patch.write_text(json.dumps({
+        "zoom_frames": ["t0212_1024.jpg"],
+        "visual_evidence": [
+            {"type": "chart", "value": "16.3x", "timestamp": 132.0,
+             "frame": "t0212_1024.jpg", "confidence": "high"}]}), encoding="utf-8")
 
     assert _run([str(tmp_path), "--merge", str(patch)]).returncode == 0
     assert len(evidence.load(tmp_path)["visual_evidence"]) == 1
@@ -355,3 +360,98 @@ def test_cli_verdicts_does_not_persist_invalid_status(tmp_path):
     p = _run([str(tmp_path), "--verdicts", str(vf)])
     assert p.returncode == 2
     assert evidence.load(tmp_path)["claims"][0]["verification"]["status"] == "unaudited"
+
+
+# ── v0.3: knowledge_items ──────────────────────────────────────────────────
+
+def test_knowledge_items_start_empty_and_get_k_ids():
+    assert _skel()["knowledge_items"] == []
+    ev = evidence.merge(_skel(), {"knowledge_items": [
+        {"type": "command", "content": "pip install -U yt-dlp", "timestamp": 10.0,
+         "evidence": [{"source": "transcript", "ref": "0"}]}]})
+    assert ev["knowledge_items"][0]["id"] == "k1"
+
+
+def test_knowledge_items_merge_is_append():
+    ev = _skel()
+    for t in ("concept", "warning"):
+        ev = evidence.merge(ev, {"knowledge_items": [
+            {"type": t, "content": "x", "timestamp": 1.0,
+             "evidence": [{"source": "transcript", "ref": "0"}]}]})
+    assert [k["id"] for k in ev["knowledge_items"]] == ["k1", "k2"]
+
+
+def test_validate_rejects_unknown_knowledge_type():
+    ev = evidence.merge(_skel(), {"knowledge_items": [
+        {"type": "vibe", "content": "x", "timestamp": 1.0,
+         "evidence": [{"source": "transcript", "ref": "0"}]}]})
+    assert any("vibe" in e for e in evidence.validate(ev))
+
+
+def test_validate_rejects_knowledge_item_without_evidence():
+    ev = evidence.merge(_skel(), {"knowledge_items": [
+        {"type": "concept", "content": "x", "timestamp": 1.0, "evidence": []}]})
+    assert any("evidence" in e for e in evidence.validate(ev))
+
+
+def test_validate_rejects_knowledge_item_with_empty_content():
+    ev = evidence.merge(_skel(), {"knowledge_items": [
+        {"type": "concept", "content": "   ", "timestamp": 1.0,
+         "evidence": [{"source": "transcript", "ref": "0"}]}]})
+    assert any("content" in e for e in evidence.validate(ev))
+
+
+def test_summary_line_includes_knowledge_count():
+    assert "knowledge=0" in evidence.summary_line(_skel())
+
+
+# ── v0.3: provenance 참조 무결성 ───────────────────────────────────────────
+
+def test_validate_rejects_frame_not_in_provenance(tmp_path):
+    """LLM이 없는 프레임 파일명을 지어내면 거부한다."""
+    f = tmp_path / "t0132_1024.jpg"
+    f.write_bytes(b"x")
+    ev = evidence.build_skeleton(_info(), _sig(), _tr(), [f], "u")
+    ev = evidence.merge(ev, {"visual_evidence": [
+        {"type": "slide", "value": "x", "timestamp": 1.0,
+         "frame": "t9999_1024.jpg", "confidence": "high"}]})
+    assert any("t9999_1024.jpg" in e for e in evidence.validate(ev))
+
+
+def test_validate_accepts_frame_present_in_provenance(tmp_path):
+    f = tmp_path / "t0132_1024.jpg"
+    f.write_bytes(b"x")
+    ev = evidence.build_skeleton(_info(), _sig(), _tr(), [f], "u")
+    ev = evidence.merge(ev, {"visual_evidence": [
+        {"type": "slide", "value": "x", "timestamp": 92.0,
+         "frame": "t0132_1024.jpg", "confidence": "high"}]})
+    assert evidence.validate(ev) == []
+
+
+def test_validate_accepts_zoom_frame_added_by_same_patch():
+    """빌더가 확대로 새로 뽑은 프레임은 zoom_frames로 함께 신고하면 통과한다."""
+    ev = evidence.merge(_skel(), {
+        "zoom_frames": ["t0212_1024.jpg"],
+        "visual_evidence": [{"type": "chart", "value": "16.3x", "timestamp": 132.0,
+                             "frame": "t0212_1024.jpg", "confidence": "high"}]})
+    assert evidence.validate(ev) == []
+
+
+def test_validate_rejects_transcript_ref_out_of_range():
+    """세그먼트가 2개인데 ref=99면 근거가 실재하지 않는다."""
+    ev = evidence.merge(_skel(), {"claims": [
+        {"claim": "x", "timestamp": 1.0, "evidence": [{"source": "transcript", "ref": "99"}]}]})
+    assert any("99" in e for e in evidence.validate(ev))
+
+
+def test_validate_rejects_non_numeric_transcript_ref():
+    ev = evidence.merge(_skel(), {"claims": [
+        {"claim": "x", "timestamp": 1.0, "evidence": [{"source": "transcript", "ref": "중간쯤"}]}]})
+    assert any("transcript" in e for e in evidence.validate(ev))
+
+
+def test_validate_applies_same_ref_rules_to_knowledge_items():
+    ev = evidence.merge(_skel(), {"knowledge_items": [
+        {"type": "command", "content": "x", "timestamp": 1.0,
+         "evidence": [{"source": "frame", "ref": "v42"}]}]})
+    assert any("v42" in e for e in evidence.validate(ev))

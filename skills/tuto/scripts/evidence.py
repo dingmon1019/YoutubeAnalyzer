@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import common  # noqa: E402
 
-SCHEMA_VERSION = "0.2"
+SCHEMA_VERSION = "0.3"
 
 VIDEO_TYPES = ("tutorial", "presentation", "interview", "lecture",
                "demo", "screen-recording", "mixed", "unknown")
@@ -32,6 +32,15 @@ EVIDENCE_TYPES = ("slide", "ui", "chart", "code", "table", "text", "other")
 CONFIDENCE = ("high", "medium", "low")
 VERIFY_STATUS = ("verified", "disputed", "unverifiable", "unaudited")
 EVIDENCE_SOURCES = ("transcript", "frame")
+
+# knowledge_items의 type. 사용자 요청 목록(14종)에서 3종을 정리했다:
+#   claim → 이미 claims[]가 담당하므로 중복
+#   configuration/parameter → 실무에서 경계가 모호해 setting으로 통합
+#   artifact → result와 겹침
+# **빈 카테고리를 만들지 않는다** — 영상에 없는 type은 배열에 등장하지 않는다.
+KNOWLEDGE_TYPES = ("concept", "procedure", "action", "command", "setting",
+                   "prerequisite", "result", "criterion", "warning",
+                   "example", "comparison")
 
 
 def evidence_path(cache_dir) -> Path:
@@ -142,6 +151,7 @@ def build_skeleton(info: dict, sig: dict, tr: dict, frames_kept: list, url: str 
         "segments": segments,
         "visual_evidence": [],
         "claims": [],
+        "knowledge_items": [],
         "gaps": [],
         "flags": list(sig.get("flags") or []) + list(tr.get("flags") or []),
     }
@@ -176,6 +186,10 @@ def merge(ev: dict, patch: dict) -> dict:
         item.setdefault("id", _next_id(ev["claims"], "c"))
         item.setdefault("verification", {"status": "unaudited"})
         ev["claims"].append(item)
+    for item in patch.get("knowledge_items") or []:
+        item = dict(item)
+        item.setdefault("id", _next_id(ev.setdefault("knowledge_items", []), "k"))
+        ev["knowledge_items"].append(item)
     for g in patch.get("gaps") or []:
         ev["gaps"].append(dict(g))
     for f in patch.get("zoom_frames") or []:
@@ -205,6 +219,52 @@ def apply_verdicts(ev: dict, verdicts: list) -> dict:
     return ev
 
 
+def _known_frames(ev: dict) -> set:
+    """provenance에 실제로 기록된 프레임 파일명 집합.
+
+    visual_evidence가 이 집합 밖의 파일명을 가리키면 그 근거는 실재하지 않는다 —
+    LLM이 그럴듯한 이름(t9999_1024.jpg)을 지어내는 경우를 잡는다."""
+    fr = (ev.get("provenance") or {}).get("frames") or {}
+    out = set()
+    for bucket in ("map", "zoom"):
+        for f in fr.get(bucket) or []:
+            name = f.get("file") if isinstance(f, dict) else str(f)
+            if name:
+                out.add(name)
+    return out
+
+
+def _check_evidence_refs(kind, ident, ev_list, ve_ids, n_segments, errs) -> None:
+    """claims와 knowledge_items가 같은 근거 규칙을 쓰므로 한 곳에 둔다.
+
+    **모든 근거는 실재하는 자막 세그먼트나 포착된 프레임으로 추적 가능해야 한다.**
+    `frame` ref는 visual_evidence id를, `transcript` ref는 segments 인덱스를 가리키며
+    둘 다 범위를 벗어나면 거부한다."""
+    if not ev_list:
+        errs.append(f"{kind}[{ident}].evidence: empty — 근거 없는 항목은 담지 않는다")
+    for e in ev_list:
+        src = e.get("source")
+        if src not in EVIDENCE_SOURCES:
+            errs.append(f"{kind}[{ident}].evidence.source: {src!r} not in {EVIDENCE_SOURCES} "
+                        f"— 'both' 대신 transcript/frame 두 항목으로 나눠 적는다")
+            continue
+        ref = e.get("ref")
+        if ref in (None, ""):
+            errs.append(f"{kind}[{ident}].evidence.ref: empty for source={src!r}")
+        elif src == "frame":
+            if ref not in ve_ids:
+                errs.append(f"{kind}[{ident}].evidence.ref: {ref!r} not found in "
+                            f"visual_evidence — 화면 근거는 실재하는 id를 가리켜야 한다")
+        else:
+            s = str(ref)
+            if not s.isdigit():
+                errs.append(f"{kind}[{ident}].evidence.ref: transcript ref는 세그먼트 "
+                            f"인덱스(숫자)여야 한다, got {ref!r}")
+            elif int(s) >= n_segments:
+                errs.append(f"{kind}[{ident}].evidence.ref: transcript 세그먼트 {s} 없음 "
+                            f"(총 {n_segments}개) — 근거가 실재하지 않는다")
+
+
 def validate(ev: dict) -> list:
     """스키마 위반 목록을 반환한다. 빈 리스트면 통과.
 
@@ -218,6 +278,9 @@ def validate(ev: dict) -> list:
     if vt not in VIDEO_TYPES:
         errs.append(f"video_type.primary: unknown value {vt!r} (allowed: {VIDEO_TYPES})")
 
+    known = _known_frames(ev)
+    n_segments = len(ev.get("segments") or [])
+
     ve_ids = set()
     for v in ev.get("visual_evidence") or []:
         vid = v.get("id", "?")
@@ -227,29 +290,31 @@ def validate(ev: dict) -> list:
         if v.get("confidence") not in CONFIDENCE:
             errs.append(f"visual_evidence[{vid}].confidence: must be one of {CONFIDENCE}, "
                         f"got {v.get('confidence')!r} — 신뢰도를 숫자로 날조하지 않는다")
-        if not v.get("frame"):
+        frame = v.get("frame")
+        if not frame:
             errs.append(f"visual_evidence[{vid}].frame: missing frame provenance")
+        elif frame not in known:
+            errs.append(f"visual_evidence[{vid}].frame: {frame!r} not in provenance.frames "
+                        f"— 실재하지 않는 프레임을 근거로 쓸 수 없다")
 
     for c in ev.get("claims") or []:
         cid = c.get("id", "?")
-        ev_list = c.get("evidence") or []
-        if not ev_list:
-            errs.append(f"claims[{cid}].evidence: empty — 근거 없는 주장은 담지 않는다")
-        for e in ev_list:
-            src = e.get("source")
-            if src not in EVIDENCE_SOURCES:
-                errs.append(f"claims[{cid}].evidence.source: {src!r} not in {EVIDENCE_SOURCES} "
-                            f"— 'both' 대신 transcript/frame 두 항목으로 나눠 적는다")
-                continue
-            if not e.get("ref"):
-                errs.append(f"claims[{cid}].evidence.ref: empty for source={src!r}")
-            elif src == "frame" and e["ref"] not in ve_ids:
-                errs.append(f"claims[{cid}].evidence.ref: {e['ref']!r} not found in "
-                            f"visual_evidence — 화면 근거는 실재하는 id를 가리켜야 한다")
+        _check_evidence_refs("claims", cid, c.get("evidence") or [],
+                             ve_ids, n_segments, errs)
         st = (c.get("verification") or {}).get("status")
         if st not in VERIFY_STATUS:
             errs.append(f"claims[{cid}].verification.status: unknown value {st!r} "
                         f"(allowed: {VERIFY_STATUS})")
+
+    for k in ev.get("knowledge_items") or []:
+        kid = k.get("id", "?")
+        if k.get("type") not in KNOWLEDGE_TYPES:
+            errs.append(f"knowledge_items[{kid}].type: unknown value {k.get('type')!r} "
+                        f"(allowed: {KNOWLEDGE_TYPES})")
+        if not str(k.get("content") or "").strip():
+            errs.append(f"knowledge_items[{kid}].content: empty")
+        _check_evidence_refs("knowledge_items", kid, k.get("evidence") or [],
+                             ve_ids, n_segments, errs)
     return errs
 
 
@@ -260,6 +325,7 @@ def summary_line(ev: dict) -> str:
             f"segments={len(ev['segments'])} "
             f"visual={len(ev['visual_evidence'])} "
             f"claims={len(ev['claims'])} "
+            f"knowledge={len(ev.get('knowledge_items') or [])} "
             f"gaps={len(ev['gaps'])} "
             f"map_frames={len(p['frames']['map'])} "
             f"zoom_frames={len(p['frames']['zoom'])}")
