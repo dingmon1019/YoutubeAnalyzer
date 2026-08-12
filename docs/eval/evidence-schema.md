@@ -185,7 +185,10 @@ python skills/tuto/scripts/evidence.py <cache_dir> --verdicts verdicts.json
 python skills/tuto/scripts/evidence.py <cache_dir> --validate
 ```
 
-`--merge`·`--verdicts`는 병합 후 자동으로 검증한다. exit 2면 아무 것도 신뢰하지 않는다.
+`--merge`·`--verdicts`는 **원자적이다** — 사본에 적용해 검증하고, 통과할 때만 저장한다.
+exit 2면 `evidence.json`은 **변경되지 않는다**(`REJECTED:` 줄로 명시). 먼저 저장하고
+나중에 검증하면 거부된 patch가 파일에 남아 스키마 게이트가 무의미해진다 — E2E 실측에서
+실제로 발생했던 결함이다.
 
 **이 CLI가 향후 MCP 툴 표면이다.** `--summary`/`--merge`/`--validate`가 그대로
 `get_evidence`/`add_evidence`/`validate_evidence` 툴이 된다. 그래서 파이썬 API가 아니라

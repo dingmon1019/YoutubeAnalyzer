@@ -307,3 +307,51 @@ def test_save_and_load_roundtrip(tmp_path):
     p = evidence.save(tmp_path, _skel())
     assert p.exists()
     assert evidence.load(tmp_path)["video"]["id"] == "abc12345678"
+
+
+# ── 원자성: 검증 실패 시 저장하지 않는다 ──────────────────────────────────
+
+def test_cli_merge_does_not_persist_invalid_patch(tmp_path):
+    """거부된 patch가 저장되면 스키마 게이트가 무의미해진다.
+
+    E2E 실측에서 발견: merge→save→validate 순서라 exit 2를 받고도 evidence.json에
+    잘못된 claim/visual_evidence가 남았다. 검증을 통과한 것만 저장해야 한다."""
+    evidence.save(tmp_path, _skel())
+    patch = tmp_path / "bad.json"
+    patch.write_text(json.dumps({
+        "visual_evidence": [{"type": "slide", "value": "x", "timestamp": 1.0,
+                             "frame": "f.jpg", "confidence": 0.92}],
+        "claims": [{"claim": "없는 근거", "timestamp": 1.0,
+                    "evidence": [{"source": "frame", "ref": "v99"}]}]}),
+        encoding="utf-8")
+
+    p = _run([str(tmp_path), "--merge", str(patch)])
+    assert p.returncode == 2
+
+    after = evidence.load(tmp_path)
+    assert after["claims"] == [], "거부된 claim이 저장됐다"
+    assert after["visual_evidence"] == [], "거부된 visual_evidence가 저장됐다"
+
+
+def test_cli_merge_persists_valid_patch(tmp_path):
+    """정상 patch는 그대로 저장된다 (원자성 수정이 정상 경로를 막지 않는지)."""
+    evidence.save(tmp_path, _skel())
+    patch = tmp_path / "ok.json"
+    patch.write_text(json.dumps({"visual_evidence": [
+        {"type": "chart", "value": "16.3x", "timestamp": 132.0,
+         "frame": "t0212_1024.jpg", "confidence": "high"}]}), encoding="utf-8")
+
+    assert _run([str(tmp_path), "--merge", str(patch)]).returncode == 0
+    assert len(evidence.load(tmp_path)["visual_evidence"]) == 1
+
+
+def test_cli_verdicts_does_not_persist_invalid_status(tmp_path):
+    ev = evidence.merge(_skel(), {"claims": [
+        {"claim": "x", "timestamp": 1.0, "evidence": [{"source": "transcript", "ref": "0"}]}]})
+    evidence.save(tmp_path, ev)
+    vf = tmp_path / "v.json"
+    vf.write_text(json.dumps([{"claim_id": "c1", "status": "probably-true"}]), encoding="utf-8")
+
+    p = _run([str(tmp_path), "--verdicts", str(vf)])
+    assert p.returncode == 2
+    assert evidence.load(tmp_path)["claims"][0]["verification"]["status"] == "unaudited"

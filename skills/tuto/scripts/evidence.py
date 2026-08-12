@@ -280,15 +280,31 @@ def main() -> int:
         print(f"ERROR: {evidence_path(cd)} 없음 — analyze.py를 먼저 실행한다", file=sys.stderr)
         return 2
     ev = load(cd)
-    if args.merge:
-        ev = merge(ev, json.loads(Path(args.merge).read_text(encoding="utf-8")))
+
+    # 쓰기 연산은 **검증을 통과한 것만 저장한다**. 먼저 저장하고 나중에 검증하면 거부된
+    # patch가 evidence.json에 남아 스키마 게이트가 무의미해진다 (E2E 실측에서 발견:
+    # exit 2를 받고도 잘못된 claim 2건·visual_evidence 1건이 파일에 들어갔다).
+    # 사본에 적용해 검증한 뒤 통과할 때만 교체한다.
+    writing = bool(args.merge or args.verdicts)
+    if writing:
+        candidate = json.loads(json.dumps(ev))
+        if args.merge:
+            candidate = merge(candidate, json.loads(Path(args.merge).read_text(encoding="utf-8")))
+        if args.verdicts:
+            candidate = apply_verdicts(
+                candidate, json.loads(Path(args.verdicts).read_text(encoding="utf-8")))
+        errs = validate(candidate)
+        if errs:
+            for e in errs:
+                print(f"INVALID: {e}", file=sys.stderr)
+            print("REJECTED: evidence.json은 변경되지 않았다", file=sys.stderr)
+            return 2
+        ev = candidate
         save(cd, ev)
-    if args.verdicts:
-        ev = apply_verdicts(ev, json.loads(Path(args.verdicts).read_text(encoding="utf-8")))
-        save(cd, ev)
+
     if args.summary:
         print(summary_line(ev))
-    if args.validate or args.merge or args.verdicts:
+    if args.validate:
         errs = validate(ev)
         if errs:
             for e in errs:
