@@ -156,6 +156,18 @@ zoom-plan.json의 구간을 확대 추출하고, **출력된 FRAME 경로 목록
 확대는 §4 빌더, 검증은 §5 감사가 각각 자기 컨텍스트에서 본다. 유일한 예외는 §2·§4의 위임이
 2회 실패해 철회된 경우다.
 
+**추출한 프레임을 evidence에 등록한다 — 이건 오케스트레이터의 책임이다.** zoom.py 출력을
+파일로 받아 그대로 먹인다:
+
+```
+python "<SKILL_DIR>/scripts/zoom.py" <id> --timestamps "..." > "<cache_dir>/zoom-out.txt"
+python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --add-frames "<cache_dir>/zoom-out.txt"
+```
+
+**빌더에게 재신고시키지 않는다.** 파이프라인이 이미 아는 사실을 LLM이 다시 적게 하면
+계약이 깨진다 — 실측에서 빌더가 신고를 빠뜨려 확대 프레임 12건이 "실재하지 않는 프레임"으로
+전부 거부됐다. 빌더가 `--crop`으로 **새로** 만든 프레임만 `zoom_frames`로 신고하면 된다.
+
 **정적 슬라이드 위주 영상은 `--ranges` 대신 `--timestamps`를 쓴다.** zoom.py의 구간 표본화는
 `count = min(20, 초×2fps)`라 10초 구간에서 20장을 뽑는데, 정지 화면에서는 같은 이미지를
 20번 받는 셈이다. 지점 지정이 같은 정보를 훨씬 싸게 얻는다.

@@ -157,6 +157,42 @@ def build_skeleton(info: dict, sig: dict, tr: dict, frames_kept: list, url: str 
     }
 
 
+def parse_frame_lines(text: str) -> list:
+    """zoom.py 출력이나 평문 목록에서 프레임 **파일명**을 뽑는다.
+
+    zoom.py는 `FRAME <절대경로> t=MM:SS` 형식으로 찍는다. 그 출력을 그대로 먹일 수 있어야
+    오케스트레이터가 §3 직후 손쉽게 등록한다 — 경로를 손으로 옮겨 적게 하면 오타가 난다."""
+    names = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("zoom:"):
+            continue
+        if line.startswith("FRAME "):
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            line = parts[1]
+        name = line.replace("\\", "/").rsplit("/", 1)[-1]
+        if name.lower().endswith((".jpg", ".jpeg", ".png")):
+            names.append(name)
+    return names
+
+
+def register_frames(ev: dict, frames: list, bucket: str = "zoom") -> dict:
+    """추출된 프레임을 provenance에 등록한다. 같은 파일명은 한 번만 들어간다.
+
+    **이건 오케스트레이터의 책임이다.** §3이 zoom.py로 뽑은 프레임을 파이프라인이 이미
+    아는데 빌더에게 재신고시키면 계약이 깨진다 — E2E 실측에서 12건이 그렇게 거부됐다."""
+    dest = ev.setdefault("provenance", {}).setdefault("frames", {}).setdefault(bucket, [])
+    have = {f.get("file") for f in dest if isinstance(f, dict)}
+    for item in frames or []:
+        meta = _frame_meta(item) if isinstance(item, str) else dict(item)
+        if meta.get("file") and meta["file"] not in have:
+            dest.append(meta)
+            have.add(meta["file"])
+    return ev
+
+
 def load(cache_dir) -> dict:
     return json.loads(evidence_path(cache_dir).read_text(encoding="utf-8"))
 
@@ -191,7 +227,10 @@ def merge(ev: dict, patch: dict) -> dict:
         item.setdefault("id", _next_id(ev.setdefault("knowledge_items", []), "k"))
         ev["knowledge_items"].append(item)
     for g in patch.get("gaps") or []:
-        ev["gaps"].append(dict(g))
+        # 형식이 어긋나도 여기서 죽지 않는다 — 그대로 실어 보내고 validate가 잡는다.
+        # merge가 예외를 던지면 스택 트레이스+exit 1이 나와 "INVALID 줄을 빌더에게
+        # 돌려준다"는 계약이 깨진다 (E2E 실측에서 발생).
+        ev["gaps"].append(dict(g) if isinstance(g, dict) else g)
     for f in patch.get("zoom_frames") or []:
         ev["provenance"]["frames"]["zoom"].append(
             _frame_meta(f) if isinstance(f, str) else dict(f))
@@ -281,8 +320,16 @@ def validate(ev: dict) -> list:
     known = _known_frames(ev)
     n_segments = len(ev.get("segments") or [])
 
+    for field in ("visual_evidence", "claims", "knowledge_items", "gaps"):
+        for i, item in enumerate(ev.get(field) or []):
+            if not isinstance(item, dict):
+                errs.append(f"{field}[{i}]: 객체여야 한다, got {type(item).__name__} "
+                            f"— {str(item)[:60]!r}")
+
     ve_ids = set()
     for v in ev.get("visual_evidence") or []:
+        if not isinstance(v, dict):
+            continue
         vid = v.get("id", "?")
         ve_ids.add(vid)
         if v.get("type") not in EVIDENCE_TYPES:
@@ -298,6 +345,8 @@ def validate(ev: dict) -> list:
                         f"— 실재하지 않는 프레임을 근거로 쓸 수 없다")
 
     for c in ev.get("claims") or []:
+        if not isinstance(c, dict):
+            continue
         cid = c.get("id", "?")
         _check_evidence_refs("claims", cid, c.get("evidence") or [],
                              ve_ids, n_segments, errs)
@@ -307,6 +356,8 @@ def validate(ev: dict) -> list:
                         f"(allowed: {VERIFY_STATUS})")
 
     for k in ev.get("knowledge_items") or []:
+        if not isinstance(k, dict):
+            continue
         kid = k.get("id", "?")
         if k.get("type") not in KNOWLEDGE_TYPES:
             errs.append(f"knowledge_items[{kid}].type: unknown value {k.get('type')!r} "
@@ -337,6 +388,8 @@ def main() -> int:
     ap.add_argument("cache_dir")
     ap.add_argument("--merge", help="병합할 patch json 경로")
     ap.add_argument("--verdicts", help="감사 판정 json 경로 (claim_id/status/auditor/note 배열)")
+    ap.add_argument("--add-frames", dest="add_frames",
+                    help="확대 프레임 등록 — zoom.py 출력을 담은 파일 경로 (FRAME 줄 파싱)")
     ap.add_argument("--validate", action="store_true")
     ap.add_argument("--summary", action="store_true")
     args = ap.parse_args()
@@ -351,9 +404,12 @@ def main() -> int:
     # patch가 evidence.json에 남아 스키마 게이트가 무의미해진다 (E2E 실측에서 발견:
     # exit 2를 받고도 잘못된 claim 2건·visual_evidence 1건이 파일에 들어갔다).
     # 사본에 적용해 검증한 뒤 통과할 때만 교체한다.
-    writing = bool(args.merge or args.verdicts)
+    writing = bool(args.merge or args.verdicts or args.add_frames)
     if writing:
         candidate = json.loads(json.dumps(ev))
+        if args.add_frames:
+            names = parse_frame_lines(Path(args.add_frames).read_text(encoding="utf-8"))
+            candidate = register_frames(candidate, names)
         if args.merge:
             candidate = merge(candidate, json.loads(Path(args.merge).read_text(encoding="utf-8")))
         if args.verdicts:
