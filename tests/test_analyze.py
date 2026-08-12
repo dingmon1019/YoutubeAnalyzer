@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -333,3 +334,39 @@ def test_signals_rebuilt_when_corrupt(tmp_path, monkeypatch):
     fresh = {"activity": {"curve": [], "peaks": []}, "flags": []}
     monkeypatch.setattr(analyze.sig_mod, "build_signals", lambda *a: fresh)
     assert analyze._load_or_build_signals(tmp_path, {}, "vid") == fresh
+
+
+def test_run_pass1_writes_evidence_skeleton(monkeypatch, tmp_path, capsys):
+    """패스1이 끝나면 evidence.json 골격이 캐시에 남고 == EVIDENCE == 줄로 경로를 알린다.
+
+    무거운 단계(다운로드·자막·프레임 추출)는 전부 대역으로 바꾸고, 이 테스트가 보는 것은
+    '골격이 실제로 저장되는가'와 '보고서가 경로를 알리는가' 두 가지뿐이다."""
+    cd = tmp_path / "cache" / "abc12345678"
+    cd.mkdir(parents=True)
+    info = {"id": "abc12345678", "title": "T", "duration": 120.0, "uploader": "C"}
+    sig = {"heatmap": [], "chapters": [], "desc_timestamps": [], "sponsorblock": [],
+           "activity": {"curve": [], "peaks": []}, "flags": []}
+    tr = {"source": "captions", "lang": "ko", "dupes_removed": 0, "flags": [],
+          "segments": [{"start": 0.0, "text": "hi"}]}
+
+    monkeypatch.setattr(analyze.common, "cache_dir", lambda vid: cd)
+    monkeypatch.setattr(analyze, "download", lambda url, c: info)
+    monkeypatch.setattr(analyze, "_load_or_build_signals", lambda c, i, v: sig)
+    monkeypatch.setattr(analyze.transcribe, "get_transcript", lambda c, mode="auto": tr)
+    monkeypatch.setattr(analyze, "extract_map_frames", lambda *a, **k: ([], 0))
+    monkeypatch.setattr(analyze, "lru_evict", lambda: [])
+
+    rc = analyze.run_pass1("https://youtu.be/abc12345678")
+    assert rc == 0
+
+    ev_file = cd / "evidence.json"
+    assert ev_file.exists(), "evidence.json이 저장되지 않았다"
+    ev = json.loads(ev_file.read_text(encoding="utf-8"))
+    assert ev["schema_version"] == "0.2"
+    assert ev["video"]["id"] == "abc12345678"
+    assert ev["segments"][0]["transcript"] == "hi"
+
+    out = capsys.readouterr().out
+    assert "== EVIDENCE ==" in out
+    assert "EVIDENCE_FILE" in out
+    assert "TYPE_HINT" in out
