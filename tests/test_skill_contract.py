@@ -68,8 +68,8 @@ def test_coverage_audit_targets_evidence_not_headings():
     assert "claims[].claim + knowledge_items[].content" in sec
 
 
-def test_coverage_audit_uses_digest_command():
-    assert "--digest" in TEXT, "커버리지 대조 목록 생성 명령이 문서에 없다"
+def test_coverage_audit_uses_coverage_input_command():
+    assert "--coverage-input" in TEXT, "커버리지 대조 입력 생성 명령이 문서에 없다"
 
 
 def test_coverage_audit_orders_source_then_evidence_then_document():
@@ -134,3 +134,59 @@ def test_no_stale_v02_outputs_as_current():
         if "guide.md" in line or "insight.md" in line:
             assert ("더 이상" in line or "호환" in line), \
                 f"v0.2 산출물이 현행처럼 적혀 있다: {line.strip()[:80]}"
+
+
+# ── v0.3.2: 구식 builder audit 계약이 다시 들어오지 않는지 ─────────────────
+
+def test_builder_does_not_select_audit_candidates():
+    """빌더가 표본 감사 후보를 반환하던 v0.2 계약은 제거됐다.
+
+    같은 LLM이 "무엇을 뽑을지"와 "무엇을 검증할지"를 둘 다 정하면 독립성이 없고,
+    후보 누락만으로 불필요한 재지시가 발생했다. 선정은 --audit-candidates가 한다."""
+    for stale in ("표본 주장 후보 6건", "후보 미반환", "표본 주장 후보"):
+        assert stale not in TEXT, f"구식 builder audit 계약이 되살아났다: {stale}"
+
+
+def test_builder_responsibility_is_three_steps():
+    sec = _section("4. 근거 추출 → evidence.json → video.md")
+    assert "빌더의 책임은 위 3단계까지다" in sec
+
+
+def test_audit_candidate_selection_is_delegated_to_script():
+    assert "--audit-candidates" in TEXT
+
+
+# ── v0.3.2: 시각 관측 (visual coverage) ────────────────────────────────────
+
+def test_reading_agent_produces_visual_coverage():
+    """관측은 §2 판독 에이전트가 만든다 — 이미 프레임을 읽고 있어 추가 비용이 없고,
+    빌더와 독립이라 coverage source로서 의미가 있다."""
+    sec = _section("2. 확대 계획 판정 → zoom-plan.json (판독 에이전트 위임)")
+    assert "visual-coverage.json" in sec
+    assert "추가 판독 비용은 사실상 0" in sec
+
+
+def test_visual_observation_is_existence_signal_not_value():
+    sec = _section("2. 확대 계획 판정 → zoom-plan.json (판독 에이전트 위임)")
+    assert "값 판독이 아니라 존재 확인" in sec
+
+
+def test_visual_observation_must_not_be_inferred_from_captions():
+    """자막에서 유추해 만들면 자막 기반 감사와 같은 것을 두 번 보는 셈이라 사각지대가 남는다."""
+    sec = _section("2. 확대 계획 판정 → zoom-plan.json (판독 에이전트 위임)")
+    assert "자막에서 유추해 만들지 마라" in sec
+
+
+def test_coverage_audit_consumes_visual_observations():
+    sec = _section("5. 표본 감사 (Agent 서브에이전트, 독립 컨텍스트)")
+    assert "VISUAL OBSERVATIONS" in sec
+    assert "존재 신호이지 값의 정본이 아니다" in sec
+
+
+def test_coverage_survives_missing_observations():
+    sec = _section("5. 표본 감사 (Agent 서브에이전트, 독립 컨텍스트)")
+    assert "관측 파일이 없으면 digest만 나온다" in sec
+
+
+def test_audit_stamp_covers_knowledge_not_only_claims():
+    assert "고위험 지식·주장" in TEXT, "감사 스탬프가 claims만 의미하는 표현으로 남아 있다"

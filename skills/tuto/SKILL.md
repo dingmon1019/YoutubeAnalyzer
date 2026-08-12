@@ -96,7 +96,8 @@ timeout 600000을 지정한다.
 - `<cache_dir>` 경로와 `pass1-report.txt` 경로
 - `== FRAMES ==` 아래 **모든 FRAME 경로 전량** (에이전트가 병렬 Read한다)
 - 아래 "판정 루브릭" 전문과 zoom-plan.json 형식
-- 산출 계약: `<cache_dir>/zoom-plan.json`을 Write한 뒤, **최종 응답으로 아래 4줄만** 반환
+- 산출 계약: `<cache_dir>/zoom-plan.json`**과 `<cache_dir>/visual-coverage.json`**을 Write한 뒤,
+  **최종 응답으로 아래 4줄만** 반환
   1. `영상유형:` `tutorial|presentation|interview|lecture|demo|screen-recording|mixed` 중
      **하나** + 신뢰도(`high|medium|low`) + 근거 한 줄 + 실제 UI 조작 유무.
      패스1 보고서의 `TYPE_HINT` 후보를 참고하되 **화면을 보고 최종 판정한다** — 힌트는
@@ -146,6 +147,38 @@ timeout 600000을 지정한다.
    텍스트 화면이 20장을 넘으면 값 밀도가 높은 쪽(표·조건식·수치)부터 채우고 나머지는 512로
    내린 뒤 그 사실을 `특이`에 적는다. (§3.3 토큰 예산 가드 — zoom.py 1회 호출 내부 캡과
    별개로, 세션 누적치는 판정하는 쪽에서 직접 추적해야 한다.)
+
+### 시각 관측도 함께 남긴다 — `<cache_dir>/visual-coverage.json`
+
+**너는 이미 지도 프레임을 전부 읽고 있다.** 그 김에 "이 시점에 중요한 정보가 화면에
+있었다"는 **존재 신호**를 남긴다. 추가 판독 비용은 사실상 0이다.
+
+```json
+{
+  "observations": [
+    {"timestamp": 203.0, "kind": "setting",
+     "observation": "설치 옵션 체크박스들이 보인다", "frame": "t0323d7_1024.jpg"},
+    {"timestamp": 318.0, "kind": "command",
+     "observation": "터미널에 명령어가 입력돼 있다", "frame": "t0518_1024.jpg"}
+  ]
+}
+```
+
+**목적은 값 판독이 아니라 존재 확인이다.** `CUDA 12.6`을 정확히 옮길 필요 없다 —
+`"CUDA/버전 설정이 보인다"` 정도면 충분하다. 정확한 값은 §4 빌더가 담당한다.
+
+커버리지 감사가 답해야 할 질문이 *"말하지 않았지만 화면에 있었던 중요한 정보를 빌더가
+통째로 놓쳤는가?"*이기 때문이다. **자막에 없는 정보는 자막 기반 감사로는 존재조차 모른다** —
+그 사각지대를 네 관측이 메운다.
+
+`kind` 허용값: `concept` `procedure` `action` `command` `setting` `prerequisite`
+`result` `criterion` `warning` `example` `comparison` `numeric` `other`
+
+- **화면에 실제로 보이는 것만.** 자막에서 유추해 만들지 마라 — 그러면 자막 기반 감사와
+  같은 것을 두 번 보는 셈이라 사각지대가 그대로 남는다.
+- 토킹헤드·전환 연출처럼 정보가 없는 프레임은 관측을 만들지 않는다.
+- `frame`은 **실제로 읽은 프레임 파일명**이어야 한다. 검증에서 거부된다.
+- 개수는 영상에 달렸다. 정보가 빽빽하면 많고, 토킹헤드 위주면 적다. 억지로 채우지 마라.
 
 판정 결과를 `<cache_dir>/zoom-plan.json`으로 저장한다 (Write):
 
@@ -310,11 +343,12 @@ python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --merge "<cache_dir>/evid
 
 **호환:** `guide.md`·`insight.md`는 더 이상 만들지 않는다. 기존 캐시의 파일은 건드리지 않는다.
 
-**4단계.** 최종 응답으로 §5 표본 주장 후보 6건(검증형 주장이 6개 미만이면 전부 — 억지로
-채우지 않는다)을 `claim id + 주장 1문장 + 근거 프레임 절대경로`로 반환한다. 서식·상태
-변화 주장 ≥1건 포함, 해당 범주 부재 시 "서식변화 주장 없음" 명시.
+**빌더의 책임은 위 3단계까지다.** 표본 감사 후보를 고르는 것은 빌더 일이 아니다 —
+`evidence.py --audit-candidates`가 evidence에서 직접 뽑는다(§5). 빌더에게 후보까지
+반환시키면 ①"무엇을 뽑을지"와 "무엇을 검증할지"를 같은 LLM이 정해 독립성이 떨어지고
+②후보 누락만으로 불필요한 재지시가 발생한다.
 
-빌더가 계약을 위반하면(patch 미생성·순서 역전·문서 미작성·후보 미반환) **1회 재지시**하고,
+빌더가 계약을 위반하면(patch 미생성·순서 역전·문서 미작성) **1회 재지시**하고,
 재실패 시 오케스트레이터가 직접 수행한다(위임 철회 — 감사 스탬프에 명시).
 
 **검증 규칙 (환각 방지 철칙):**
@@ -393,13 +427,17 @@ evidence.json의 claims[].claim + knowledge_items[].content
 누락 후보
 ```
 
-대조 대상 목록은 스크립트로 뽑는다 (`[type] content` 한 줄씩):
+대조 입력은 스크립트가 만든다 — **evidence digest + §2의 시각 관측 + 결정론적 사전 필터**:
 
 ```
-python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --digest
+python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --coverage-input
 ```
 
-별도 Sonnet Agent에 **자막 전문·챕터·DESC_TIMESTAMPS + `--digest` 출력**을 보낸다
+사전 필터는 "관측 시각 ±45초 안에 같은 kind의 지식이 없는 관측"을 미리 골라 준다.
+**이건 힌트지 판정이 아니다** — 최종 판단은 감사 에이전트가 원본으로 재확인해 내린다.
+(관측 파일이 없으면 digest만 나온다. §2가 실패했어도 커버리지는 돈다.)
+
+별도 Sonnet Agent에 **자막 전문·챕터·DESC_TIMESTAMPS + `--coverage-input` 출력**을 보낸다
 (video.md 본문·제목은 주지 않는다):
 
 > "아래 소스에서 **기대 지식 체크리스트**를 먼저 만들어라 — 이 영상을 보지 않은 에이전트가
@@ -407,8 +445,18 @@ python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --digest
 > concept · claim · procedure · action · command · setting · prerequisite · result ·
 > criterion · warning · example · comparison · 중요 수치.
 > **빈 범주를 억지로 만들지 마라** — 인터뷰에 command가 없는 건 정상이다.
-> 그런 다음 아래 `[type] content` 목록과 대조해, 체크리스트에는 있으나 목록에 없는 항목만
-> `- [MM:SS] [type] <내용> — 근거: <자막 인용>` 형식으로 반환하라. 없으면 'none'."
+>
+> **자막뿐 아니라 `VISUAL OBSERVATIONS`도 소스로 쓴다.** 관측이 `[03:18] command — 터미널에
+> 명령어가 보인다`라고 하는데 digest의 그 시점 근처에 command/action/setting이 하나도 없다면
+> **누락 후보로 의심하라.** 이 영상의 시청자는 화면을 보지만 자막만으로는 그 정보가
+> 있었는지조차 알 수 없다.
+>
+> 단 **관측은 존재 신호이지 값의 정본이 아니다.** 관측 문구를 그대로 지식으로 옮기지 마라 —
+> 정확한 값은 원본 프레임으로 재확인해야 한다.
+>
+> 그런 다음 `EVIDENCE DIGEST`와 대조해, 체크리스트에는 있으나 digest에 없는 항목만
+> `- [MM:SS] [type] <내용> — 근거: <자막 인용 또는 관측 + 프레임>` 형식으로 반환하라.
+> 없으면 'none'."
 
 반환된 누락 후보는 **바로 추가하지 않는다.** 자막·프레임 근거로 재확인한 뒤:
 - **명백한 누락** → `evidence.py --merge`로 evidence.json에 보강하고 `video.md`에도 반영 (1회 한정)
@@ -443,7 +491,7 @@ python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --verdicts "<cache_dir>/v
 
 결과는 이 형식의 스탬프로 남긴다:
 
-`📋 표본 감사: 6개 주장 중 6 일치 — Sonnet 6건 판정 + 상위 모델 재검 0건 / 커버리지: 기대 항목 12개 중 누락 후보 1건 (검증 범위: 설정값·버튼명·수치·순서·서식변화·커버리지)`
+`📋 표본 감사: 고위험 지식·주장 6건 중 6 일치 — Sonnet 6건 판정 + 상위 모델 재검 0건 / 커버리지: 기대 지식 12건 중 누락 후보 1건 (시각 관측 N건 대조 포함) (검증 범위: 설정값·버튼명·수치·명령어·순서·서식변화·커버리지)`
 
 ## 6. 외부 GT diff
 

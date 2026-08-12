@@ -671,3 +671,126 @@ def test_cli_digest_prints_lines(tmp_path):
     p = _run([str(tmp_path), "--digest"])
     assert p.returncode == 0
     assert "[setting] PATH 체크" in p.stdout
+
+
+# ── v0.3.2: 시각 관측 (visual coverage) ────────────────────────────────────
+
+def _ev_with_frames(kn=()):
+    """map 프레임 1장 + zoom 프레임 2장이 등록된 evidence."""
+    ev = evidence.build_skeleton(_info(), _sig(), _tr(), ["t0001_512.jpg"], "u")
+    ev = evidence.register_frames(ev, ["t0323_1024.jpg", "t0518_1024.jpg"])
+    if kn:
+        ev = evidence.merge(ev, {"knowledge_items": [
+            {"type": t, "content": c, "timestamp": ts,
+             "evidence": [{"source": "transcript", "ref": "0"}]} for t, c, ts in kn]})
+    return ev
+
+
+def _obs(kind, ts, frame="t0323_1024.jpg", text="something visible"):
+    return {"timestamp": ts, "kind": kind, "observation": text, "frame": frame}
+
+
+def test_validate_observations_accepts_well_formed():
+    ev = _ev_with_frames()
+    assert evidence.validate_observations([_obs("setting", 203.0)], ev) == []
+
+
+def test_validate_observations_rejects_unknown_kind():
+    ev = _ev_with_frames()
+    errs = evidence.validate_observations([_obs("vibes", 1.0)], ev)
+    assert any("vibes" in e for e in errs)
+
+
+def test_validate_observations_rejects_frame_not_in_provenance():
+    ev = _ev_with_frames()
+    errs = evidence.validate_observations([_obs("command", 1.0, frame="t9999_1024.jpg")], ev)
+    assert any("t9999_1024.jpg" in e for e in errs)
+
+
+def test_validate_observations_rejects_missing_timestamp():
+    ev = _ev_with_frames()
+    errs = evidence.validate_observations([{"kind": "command", "observation": "x",
+                                            "frame": "t0323_1024.jpg"}], ev)
+    assert any("timestamp" in e for e in errs)
+
+
+def test_validate_observations_rejects_empty_observation():
+    ev = _ev_with_frames()
+    errs = evidence.validate_observations([_obs("command", 1.0, text="  ")], ev)
+    assert any("observation" in e for e in errs)
+
+
+def test_validate_observations_rejects_non_dict():
+    assert any("객체" in e for e in evidence.validate_observations(["문자열"], _ev_with_frames()))
+
+
+def test_observation_kinds_reuse_knowledge_types():
+    for t in evidence.KNOWLEDGE_TYPES:
+        assert t in evidence.OBSERVATION_KINDS
+    assert "numeric" in evidence.OBSERVATION_KINDS
+
+
+# ── v0.3.2 핵심: 화면에만 있던 정보의 누락 검출 ────────────────────────────
+
+def test_uncovered_observation_when_evidence_missed_a_screen_only_command():
+    """이번 작업의 핵심 시험.
+
+    화면에는 터미널 명령이 보이는데(관측) evidence에는 그 시점 command가 전혀 없다
+    → 커버리지 후보. 자막에 안 나온 정보라 transcript 기반 감사로는 존재조차 모른다."""
+    ev = _ev_with_frames(kn=[("concept", "개념 설명", 200.0),
+                             ("setting", "설정 하나", 205.0)])
+    obs = [_obs("command", 318.0, frame="t0518_1024.jpg",
+                text="terminal command visible")]
+    unc = evidence.uncovered_observations(ev, obs)
+    assert len(unc) == 1 and unc[0]["kind"] == "command"
+
+
+def test_observation_is_covered_when_same_kind_is_nearby():
+    ev = _ev_with_frames(kn=[("command", "pip install -U yt-dlp", 320.0)])
+    assert evidence.uncovered_observations(ev, [_obs("command", 318.0)]) == []
+
+
+def test_observation_not_covered_by_different_kind_nearby():
+    """같은 시각에 concept만 있으면 command 관측은 여전히 후보다."""
+    ev = _ev_with_frames(kn=[("concept", "개념", 320.0)])
+    assert len(evidence.uncovered_observations(ev, [_obs("command", 318.0)])) == 1
+
+
+def test_observation_outside_window_is_candidate():
+    ev = _ev_with_frames(kn=[("command", "x", 10.0)])
+    assert len(evidence.uncovered_observations(ev, [_obs("command", 300.0)])) == 1
+
+
+def test_numeric_observation_is_loosely_matched():
+    """numeric/other는 kind 특정이 안 되므로 근처에 아무 항목이나 있으면 covered."""
+    ev = _ev_with_frames(kn=[("result", "결과", 200.0)])
+    assert evidence.uncovered_observations(ev, [_obs("numeric", 205.0)]) == []
+
+
+def test_coverage_input_contains_digest_observations_and_prefilter():
+    ev = _ev_with_frames(kn=[("concept", "개념 A", 10.0)])
+    text = evidence.coverage_input(ev, [_obs("command", 318.0)])
+    assert "EVIDENCE DIGEST" in text
+    assert "[concept] 개념 A" in text
+    assert "VISUAL OBSERVATIONS" in text
+    assert "사전 필터" in text
+    assert "terminal" in text or "something visible" in text
+
+
+def test_cli_coverage_input_validates_and_prints(tmp_path):
+    ev = _ev_with_frames(kn=[("concept", "개념", 10.0)])
+    evidence.save(tmp_path, ev)
+    f = tmp_path / "visual-coverage.json"
+    f.write_text(json.dumps({"observations": [_obs("command", 318.0)]}), encoding="utf-8")
+    p = _run([str(tmp_path), "--coverage-input", str(f)])
+    assert p.returncode == 0, p.stderr
+    assert "VISUAL OBSERVATIONS" in p.stdout
+
+
+def test_cli_coverage_input_rejects_bad_observation(tmp_path):
+    evidence.save(tmp_path, _ev_with_frames())
+    f = tmp_path / "bad.json"
+    f.write_text(json.dumps({"observations": [_obs("nope", 1.0)]}), encoding="utf-8")
+    p = _run([str(tmp_path), "--coverage-input", str(f)])
+    assert p.returncode == 2
+    assert "nope" in p.stderr
