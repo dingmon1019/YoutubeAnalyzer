@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import common
+import evidence
 import frames
 import signals as sig_mod
 import transcribe
@@ -260,6 +261,15 @@ def run_pass1(url: str) -> int:
     print(", ".join(common.fmt_ts(p) for p in sig["activity"]["peaks"]) or "(none)")
     print("== FRAMES ==")
     frames.report(kept)
+    # evidence 골격을 여기서 만들어 둔다 — 하류(판독 에이전트·빌더·감사)가 직접 JSON을
+    # 쓰지 않고 evidence.py CLI로만 기여하게 해서 스키마 위반을 exit 2로 잡기 위함이다.
+    ev = evidence.build_skeleton(info, sig, tr, kept, url)
+    evidence.save(cd, ev)
+    print("== EVIDENCE ==")
+    print(evidence.summary_line(ev))
+    hint = ev["video_type"]["hint"]
+    print(f"TYPE_HINT candidates={'|'.join(hint['candidates'])} basis={hint['basis']}")
+    print(f"EVIDENCE_FILE {evidence.evidence_path(cd)}")
     print(f"== CACHE == {cd}")
     if duration > 1860:
         print("WARNING: video exceeds 30min design target — map is sparse; consider --ranges zoom on a section")

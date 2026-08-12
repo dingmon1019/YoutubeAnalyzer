@@ -1,7 +1,7 @@
 {
   "name": "tuto",
-  "version": "0.1.6",
-  "description": "유튜브 튜토리얼 영상(≤30분, 한/영)을 따라하기 스텝 가이드로 변환한다. 신호 가중 2패스로 화면에서 설정값·버튼명을 직접 판독하고, 독립 감사 에이전트가 모든 주장을 반박 검증한 뒤 제시한다.",
+  "version": "0.2.0",
+  "description": "유튜브 영상을 AI 에이전트가 추론에 쓸 수 있는 검증된 근거로 바꾼다. 자막뿐 아니라 화면의 슬라이드·UI·표·차트·설정값·코드를 프레임에서 직접 판독하고, 독립 감사로 검증해 evidence.json으로 구조화한다. 따라하기 가이드(GUIDE)·핵심 주장과 수치 분석(INSIGHT)·질의응답(ASK) 세 모드.",
   "author": {
     "name": "hwangjs"
   },
@@ -9,12 +9,14 @@
   "repository": "https://github.com/dingmon1019/YoutubeAnalyzer",
   "keywords": [
     "youtube",
-    "tutorial",
-    "video-analysis",
-    "step-by-step-guide",
+    "video-understanding",
+    "evidence",
+    "ai-agents",
     "transcript",
     "frame-extraction",
-    "verification"
+    "verification",
+    "step-by-step-guide",
+    "insight-extraction"
   ],
   "license": "MIT"
 }
