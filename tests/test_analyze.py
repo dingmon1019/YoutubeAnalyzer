@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "tuto" / "scripts"))
 import analyze
+import evidence
 
 SIG = {
     "chapters": [{"start": 0, "end": 300, "title": "인트로"}, {"start": 300, "end": 900, "title": "본론"}],
@@ -362,7 +363,7 @@ def test_run_pass1_writes_evidence_skeleton(monkeypatch, tmp_path, capsys):
     ev_file = cd / "evidence.json"
     assert ev_file.exists(), "evidence.json이 저장되지 않았다"
     ev = json.loads(ev_file.read_text(encoding="utf-8"))
-    assert ev["schema_version"] == "0.2"
+    assert ev["schema_version"] == evidence.SCHEMA_VERSION
     assert ev["video"]["id"] == "abc12345678"
     assert ev["segments"][0]["transcript"] == "hi"
 

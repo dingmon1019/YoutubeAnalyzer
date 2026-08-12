@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import common  # noqa: E402
 
-SCHEMA_VERSION = "0.2"
+SCHEMA_VERSION = "0.3"
 
 VIDEO_TYPES = ("tutorial", "presentation", "interview", "lecture",
                "demo", "screen-recording", "mixed", "unknown")
@@ -32,6 +32,15 @@ EVIDENCE_TYPES = ("slide", "ui", "chart", "code", "table", "text", "other")
 CONFIDENCE = ("high", "medium", "low")
 VERIFY_STATUS = ("verified", "disputed", "unverifiable", "unaudited")
 EVIDENCE_SOURCES = ("transcript", "frame")
+
+# knowledge_items의 type. 사용자 요청 목록(14종)에서 3종을 정리했다:
+#   claim → 이미 claims[]가 담당하므로 중복
+#   configuration/parameter → 실무에서 경계가 모호해 setting으로 통합
+#   artifact → result와 겹침
+# **빈 카테고리를 만들지 않는다** — 영상에 없는 type은 배열에 등장하지 않는다.
+KNOWLEDGE_TYPES = ("concept", "procedure", "action", "command", "setting",
+                   "prerequisite", "result", "criterion", "warning",
+                   "example", "comparison")
 
 
 def evidence_path(cache_dir) -> Path:
@@ -142,9 +151,46 @@ def build_skeleton(info: dict, sig: dict, tr: dict, frames_kept: list, url: str 
         "segments": segments,
         "visual_evidence": [],
         "claims": [],
+        "knowledge_items": [],
         "gaps": [],
         "flags": list(sig.get("flags") or []) + list(tr.get("flags") or []),
     }
+
+
+def parse_frame_lines(text: str) -> list:
+    """zoom.py 출력이나 평문 목록에서 프레임 **파일명**을 뽑는다.
+
+    zoom.py는 `FRAME <절대경로> t=MM:SS` 형식으로 찍는다. 그 출력을 그대로 먹일 수 있어야
+    오케스트레이터가 §3 직후 손쉽게 등록한다 — 경로를 손으로 옮겨 적게 하면 오타가 난다."""
+    names = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("zoom:"):
+            continue
+        if line.startswith("FRAME "):
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            line = parts[1]
+        name = line.replace("\\", "/").rsplit("/", 1)[-1]
+        if name.lower().endswith((".jpg", ".jpeg", ".png")):
+            names.append(name)
+    return names
+
+
+def register_frames(ev: dict, frames: list, bucket: str = "zoom") -> dict:
+    """추출된 프레임을 provenance에 등록한다. 같은 파일명은 한 번만 들어간다.
+
+    **이건 오케스트레이터의 책임이다.** §3이 zoom.py로 뽑은 프레임을 파이프라인이 이미
+    아는데 빌더에게 재신고시키면 계약이 깨진다 — E2E 실측에서 12건이 그렇게 거부됐다."""
+    dest = ev.setdefault("provenance", {}).setdefault("frames", {}).setdefault(bucket, [])
+    have = {f.get("file") for f in dest if isinstance(f, dict)}
+    for item in frames or []:
+        meta = _frame_meta(item) if isinstance(item, str) else dict(item)
+        if meta.get("file") and meta["file"] not in have:
+            dest.append(meta)
+            have.add(meta["file"])
+    return ev
 
 
 def load(cache_dir) -> dict:
@@ -176,8 +222,15 @@ def merge(ev: dict, patch: dict) -> dict:
         item.setdefault("id", _next_id(ev["claims"], "c"))
         item.setdefault("verification", {"status": "unaudited"})
         ev["claims"].append(item)
+    for item in patch.get("knowledge_items") or []:
+        item = dict(item)
+        item.setdefault("id", _next_id(ev.setdefault("knowledge_items", []), "k"))
+        ev["knowledge_items"].append(item)
     for g in patch.get("gaps") or []:
-        ev["gaps"].append(dict(g))
+        # 형식이 어긋나도 여기서 죽지 않는다 — 그대로 실어 보내고 validate가 잡는다.
+        # merge가 예외를 던지면 스택 트레이스+exit 1이 나와 "INVALID 줄을 빌더에게
+        # 돌려준다"는 계약이 깨진다 (E2E 실측에서 발생).
+        ev["gaps"].append(dict(g) if isinstance(g, dict) else g)
     for f in patch.get("zoom_frames") or []:
         ev["provenance"]["frames"]["zoom"].append(
             _frame_meta(f) if isinstance(f, str) else dict(f))
@@ -205,6 +258,52 @@ def apply_verdicts(ev: dict, verdicts: list) -> dict:
     return ev
 
 
+def _known_frames(ev: dict) -> set:
+    """provenance에 실제로 기록된 프레임 파일명 집합.
+
+    visual_evidence가 이 집합 밖의 파일명을 가리키면 그 근거는 실재하지 않는다 —
+    LLM이 그럴듯한 이름(t9999_1024.jpg)을 지어내는 경우를 잡는다."""
+    fr = (ev.get("provenance") or {}).get("frames") or {}
+    out = set()
+    for bucket in ("map", "zoom"):
+        for f in fr.get(bucket) or []:
+            name = f.get("file") if isinstance(f, dict) else str(f)
+            if name:
+                out.add(name)
+    return out
+
+
+def _check_evidence_refs(kind, ident, ev_list, ve_ids, n_segments, errs) -> None:
+    """claims와 knowledge_items가 같은 근거 규칙을 쓰므로 한 곳에 둔다.
+
+    **모든 근거는 실재하는 자막 세그먼트나 포착된 프레임으로 추적 가능해야 한다.**
+    `frame` ref는 visual_evidence id를, `transcript` ref는 segments 인덱스를 가리키며
+    둘 다 범위를 벗어나면 거부한다."""
+    if not ev_list:
+        errs.append(f"{kind}[{ident}].evidence: empty — 근거 없는 항목은 담지 않는다")
+    for e in ev_list:
+        src = e.get("source")
+        if src not in EVIDENCE_SOURCES:
+            errs.append(f"{kind}[{ident}].evidence.source: {src!r} not in {EVIDENCE_SOURCES} "
+                        f"— 'both' 대신 transcript/frame 두 항목으로 나눠 적는다")
+            continue
+        ref = e.get("ref")
+        if ref in (None, ""):
+            errs.append(f"{kind}[{ident}].evidence.ref: empty for source={src!r}")
+        elif src == "frame":
+            if ref not in ve_ids:
+                errs.append(f"{kind}[{ident}].evidence.ref: {ref!r} not found in "
+                            f"visual_evidence — 화면 근거는 실재하는 id를 가리켜야 한다")
+        else:
+            s = str(ref)
+            if not s.isdigit():
+                errs.append(f"{kind}[{ident}].evidence.ref: transcript ref는 세그먼트 "
+                            f"인덱스(숫자)여야 한다, got {ref!r}")
+            elif int(s) >= n_segments:
+                errs.append(f"{kind}[{ident}].evidence.ref: transcript 세그먼트 {s} 없음 "
+                            f"(총 {n_segments}개) — 근거가 실재하지 않는다")
+
+
 def validate(ev: dict) -> list:
     """스키마 위반 목록을 반환한다. 빈 리스트면 통과.
 
@@ -218,8 +317,19 @@ def validate(ev: dict) -> list:
     if vt not in VIDEO_TYPES:
         errs.append(f"video_type.primary: unknown value {vt!r} (allowed: {VIDEO_TYPES})")
 
+    known = _known_frames(ev)
+    n_segments = len(ev.get("segments") or [])
+
+    for field in ("visual_evidence", "claims", "knowledge_items", "gaps"):
+        for i, item in enumerate(ev.get(field) or []):
+            if not isinstance(item, dict):
+                errs.append(f"{field}[{i}]: 객체여야 한다, got {type(item).__name__} "
+                            f"— {str(item)[:60]!r}")
+
     ve_ids = set()
     for v in ev.get("visual_evidence") or []:
+        if not isinstance(v, dict):
+            continue
         vid = v.get("id", "?")
         ve_ids.add(vid)
         if v.get("type") not in EVIDENCE_TYPES:
@@ -227,29 +337,35 @@ def validate(ev: dict) -> list:
         if v.get("confidence") not in CONFIDENCE:
             errs.append(f"visual_evidence[{vid}].confidence: must be one of {CONFIDENCE}, "
                         f"got {v.get('confidence')!r} — 신뢰도를 숫자로 날조하지 않는다")
-        if not v.get("frame"):
+        frame = v.get("frame")
+        if not frame:
             errs.append(f"visual_evidence[{vid}].frame: missing frame provenance")
+        elif frame not in known:
+            errs.append(f"visual_evidence[{vid}].frame: {frame!r} not in provenance.frames "
+                        f"— 실재하지 않는 프레임을 근거로 쓸 수 없다")
 
     for c in ev.get("claims") or []:
+        if not isinstance(c, dict):
+            continue
         cid = c.get("id", "?")
-        ev_list = c.get("evidence") or []
-        if not ev_list:
-            errs.append(f"claims[{cid}].evidence: empty — 근거 없는 주장은 담지 않는다")
-        for e in ev_list:
-            src = e.get("source")
-            if src not in EVIDENCE_SOURCES:
-                errs.append(f"claims[{cid}].evidence.source: {src!r} not in {EVIDENCE_SOURCES} "
-                            f"— 'both' 대신 transcript/frame 두 항목으로 나눠 적는다")
-                continue
-            if not e.get("ref"):
-                errs.append(f"claims[{cid}].evidence.ref: empty for source={src!r}")
-            elif src == "frame" and e["ref"] not in ve_ids:
-                errs.append(f"claims[{cid}].evidence.ref: {e['ref']!r} not found in "
-                            f"visual_evidence — 화면 근거는 실재하는 id를 가리켜야 한다")
+        _check_evidence_refs("claims", cid, c.get("evidence") or [],
+                             ve_ids, n_segments, errs)
         st = (c.get("verification") or {}).get("status")
         if st not in VERIFY_STATUS:
             errs.append(f"claims[{cid}].verification.status: unknown value {st!r} "
                         f"(allowed: {VERIFY_STATUS})")
+
+    for k in ev.get("knowledge_items") or []:
+        if not isinstance(k, dict):
+            continue
+        kid = k.get("id", "?")
+        if k.get("type") not in KNOWLEDGE_TYPES:
+            errs.append(f"knowledge_items[{kid}].type: unknown value {k.get('type')!r} "
+                        f"(allowed: {KNOWLEDGE_TYPES})")
+        if not str(k.get("content") or "").strip():
+            errs.append(f"knowledge_items[{kid}].content: empty")
+        _check_evidence_refs("knowledge_items", kid, k.get("evidence") or [],
+                             ve_ids, n_segments, errs)
     return errs
 
 
@@ -260,6 +376,7 @@ def summary_line(ev: dict) -> str:
             f"segments={len(ev['segments'])} "
             f"visual={len(ev['visual_evidence'])} "
             f"claims={len(ev['claims'])} "
+            f"knowledge={len(ev.get('knowledge_items') or [])} "
             f"gaps={len(ev['gaps'])} "
             f"map_frames={len(p['frames']['map'])} "
             f"zoom_frames={len(p['frames']['zoom'])}")
@@ -271,6 +388,8 @@ def main() -> int:
     ap.add_argument("cache_dir")
     ap.add_argument("--merge", help="병합할 patch json 경로")
     ap.add_argument("--verdicts", help="감사 판정 json 경로 (claim_id/status/auditor/note 배열)")
+    ap.add_argument("--add-frames", dest="add_frames",
+                    help="확대 프레임 등록 — zoom.py 출력을 담은 파일 경로 (FRAME 줄 파싱)")
     ap.add_argument("--validate", action="store_true")
     ap.add_argument("--summary", action="store_true")
     args = ap.parse_args()
@@ -285,9 +404,12 @@ def main() -> int:
     # patch가 evidence.json에 남아 스키마 게이트가 무의미해진다 (E2E 실측에서 발견:
     # exit 2를 받고도 잘못된 claim 2건·visual_evidence 1건이 파일에 들어갔다).
     # 사본에 적용해 검증한 뒤 통과할 때만 교체한다.
-    writing = bool(args.merge or args.verdicts)
+    writing = bool(args.merge or args.verdicts or args.add_frames)
     if writing:
         candidate = json.loads(json.dumps(ev))
+        if args.add_frames:
+            names = parse_frame_lines(Path(args.add_frames).read_text(encoding="utf-8"))
+            candidate = register_frames(candidate, names)
         if args.merge:
             candidate = merge(candidate, json.loads(Path(args.merge).read_text(encoding="utf-8")))
         if args.verdicts:
