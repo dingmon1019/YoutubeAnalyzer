@@ -190,3 +190,12 @@ def test_coverage_survives_missing_observations():
 
 def test_audit_stamp_covers_knowledge_not_only_claims():
     assert "고위험 지식·주장" in TEXT, "감사 스탬프가 claims만 의미하는 표현으로 남아 있다"
+
+
+# ── gaps 정의 (2026-08-14 실측: 빌더 3명 중 2명이 gaps에 산문 노트를 넣어 merge 거부) ──
+
+def test_skill_defines_gaps_as_time_ranges_not_notes():
+    """예시 JSON 한 줄만으로는 부족했다 — gaps가 시간 구간 객체 전용이며 산문 노트는
+    '누락 후보'로 가야 한다는 명시 문구가 있어야 한다."""
+    assert "시간 구간 객체만" in TEXT
+    assert "누락 후보" in TEXT

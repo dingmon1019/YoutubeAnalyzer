@@ -265,6 +265,11 @@ python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --add-frames "<cache_dir>
 }
 ```
 
+**`gaps`는 시간 구간 객체만 담는다** — `{"start": 초, "end": 초, "reason": "..."}` 형식.
+"확인 못 한 것" 산문 노트는 gaps가 아니라 `video.md`의 `## 누락 후보` 절에 적는다.
+문자열을 넣으면 `--merge`가 exit 2로 거부한다 (실측 2026-08-14: 빌더 3명 중 2명이 이
+함정에 걸렸다 — 예시만으로는 부족했다).
+
 **`knowledge_items` — 이 영상을 "쓸 수 있는 지식"으로 만드는 단위다.**
 
 허용 type 11종:
