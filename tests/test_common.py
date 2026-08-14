@@ -81,3 +81,18 @@ def test_frame_label_parses_tag_variants():
     assert common.frame_label(Path("t0312d5_1024.jpg")) == "03:12"
     assert common.frame_label(Path("t10312_512.jpg")) == "1:03:12"
     assert common.frame_label(Path("t0618d4_1024c10_200_400_120.jpg")) == "06:18"
+
+
+def test_detect_js_runtime_prefers_deno(monkeypatch):
+    """yt-dlp EJS는 deno만 기본 활성이므로 deno를 최우선 탐지한다."""
+    monkeypatch.setattr(common.shutil, "which",
+                        lambda name: "/fake/" + name if name in ("deno", "node") else None)
+    assert common.detect_js_runtime() == "deno"
+
+
+def test_detect_js_runtime_falls_back_to_node_then_empty(monkeypatch):
+    monkeypatch.setattr(common.shutil, "which",
+                        lambda name: "/fake/node" if name == "node" else None)
+    assert common.detect_js_runtime() == "node"
+    monkeypatch.setattr(common.shutil, "which", lambda name: None)
+    assert common.detect_js_runtime() == ""

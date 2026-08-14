@@ -1,5 +1,6 @@
 """yta 공용 유틸: 설정·캐시 경로·시간 파싱·subprocess. 스크립트 간 유일한 공유 모듈."""
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -95,3 +96,13 @@ def utf8_stdout() -> None:
                 stream.reconfigure(encoding="utf-8", errors="replace")
             except (ValueError, OSError):
                 pass
+
+
+def detect_js_runtime() -> str:
+    """yt-dlp EJS용 JS 런타임 탐지. yt-dlp는 deno만 기본 활성이라 deno가 있으면 플래그가
+    필요 없고, node/bun은 다운로드 명령에 --js-runtimes로 명시해야 쓰인다. 없으면 ""
+    — 2026-08-14 실측: 런타임 부재 시 YouTube 다운로드가 HTTP 403으로 즉사했다."""
+    for rt in ("deno", "node", "bun"):
+        if shutil.which(rt):
+            return rt
+    return ""
