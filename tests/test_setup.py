@@ -28,7 +28,7 @@ def test_check_prints_note_when_ytdlp_stale(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(yta_setup.common, "CONFIG_FILE", tmp_path / ".env")
     monkeypatch.setattr(yta_setup, "check_env", lambda: {
         "status": "ready", "missing": [], "ytdlp_version": "2025.01.01",
-        "ytdlp_stale": True, "has_groq_key": False, "has_faster_whisper": False,
+        "ytdlp_stale": True, "js_runtime": "node", "has_groq_key": False, "has_faster_whisper": False,
         "config_file": str(tmp_path / ".env"),
     })
     monkeypatch.setattr(yta_setup.sys, "argv", ["setup.py", "--check"])
@@ -46,7 +46,7 @@ def test_check_silent_when_ytdlp_fresh(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(yta_setup.common, "CONFIG_FILE", tmp_path / ".env")
     monkeypatch.setattr(yta_setup, "check_env", lambda: {
         "status": "ready", "missing": [], "ytdlp_version": "2026.03.01",
-        "ytdlp_stale": False, "has_groq_key": False, "has_faster_whisper": False,
+        "ytdlp_stale": False, "js_runtime": "node", "has_groq_key": False, "has_faster_whisper": False,
         "config_file": str(tmp_path / ".env"),
     })
     monkeypatch.setattr(yta_setup.sys, "argv", ["setup.py", "--check"])
@@ -66,3 +66,40 @@ def test_scaffold_creates_env(monkeypatch, tmp_path):
     assert "GROQ_API_KEY=" in text and "CACHE_MAX_VIDEOS=10" in text
     yta_setup.scaffold_config()  # 멱등 — 기존 파일 덮어쓰지 않음
     assert env.read_text(encoding="utf-8") == text
+
+
+def test_check_env_reports_js_runtime(monkeypatch, tmp_path):
+    monkeypatch.setattr(yta_setup.common, "CONFIG_FILE", tmp_path / ".env")
+    monkeypatch.setattr(yta_setup.common, "detect_js_runtime", lambda: "node")
+    r = yta_setup.check_env()
+    assert r["js_runtime"] == "node"
+
+
+def test_check_prints_note_when_no_js_runtime(monkeypatch, tmp_path, capsys):
+    """실측(2026-08-14): JS 런타임 부재로 다운로드가 403 즉사했는데 --check는 exit 0으로
+    통과시켰다. stale NOTE 선례(F6)와 같은 계약으로 — exit 0 유지 + stderr 경고."""
+    monkeypatch.setattr(yta_setup.common, "CONFIG_FILE", tmp_path / ".env")
+    monkeypatch.setattr(yta_setup, "check_env", lambda: {
+        "status": "ready", "missing": [], "ytdlp_version": "2026.07.04",
+        "ytdlp_stale": False, "js_runtime": "", "has_groq_key": False,
+        "has_faster_whisper": False, "config_file": str(tmp_path / ".env"),
+    })
+    monkeypatch.setattr(yta_setup.sys, "argv", ["setup.py", "--check"])
+    code = yta_setup.main()
+    err = capsys.readouterr().err
+    assert "JS runtime" in err and "403" in err
+    assert code == 0
+
+
+def test_check_silent_when_js_runtime_present(monkeypatch, tmp_path, capsys):
+    """음성 회귀 가드: 런타임이 있으면 여전히 완전 침묵 + exit 0."""
+    monkeypatch.setattr(yta_setup.common, "CONFIG_FILE", tmp_path / ".env")
+    monkeypatch.setattr(yta_setup, "check_env", lambda: {
+        "status": "ready", "missing": [], "ytdlp_version": "2026.07.04",
+        "ytdlp_stale": False, "js_runtime": "deno", "has_groq_key": False,
+        "has_faster_whisper": False, "config_file": str(tmp_path / ".env"),
+    })
+    monkeypatch.setattr(yta_setup.sys, "argv", ["setup.py", "--check"])
+    code = yta_setup.main()
+    out, err = capsys.readouterr()
+    assert out == "" and err == "" and code == 0

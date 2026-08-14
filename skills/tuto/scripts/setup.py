@@ -40,6 +40,7 @@ def check_env() -> dict:
         "missing": missing,
         "ytdlp_version": version,
         "ytdlp_stale": stale,
+        "js_runtime": common.detect_js_runtime(),
         "has_groq_key": bool(cfg.get("GROQ_API_KEY")),
         "has_faster_whisper": importlib.util.find_spec("faster_whisper") is not None,
         "config_file": str(common.CONFIG_FILE),
@@ -65,6 +66,14 @@ def main() -> int:
                 print(
                     f"NOTE: yt-dlp {r['ytdlp_version']} looks stale (< {YTDLP_MIN}) — "
                     f"update recommended: pip install -U yt-dlp",
+                    file=sys.stderr,
+                )
+            if not r["js_runtime"]:
+                # 실측(2026-08-14): 런타임 부재 시 유튜브 다운로드가 403으로 즉사 —
+                # 설치 자체는 끝난 상태이므로 exit 0은 유지하고 stderr에만 남긴다(F6 선례).
+                print(
+                    "NOTE: no JS runtime for yt-dlp (deno/node/bun) — YouTube downloads "
+                    "may fail with HTTP 403. install: winget install DenoLand.Deno",
                     file=sys.stderr,
                 )
             return 0
