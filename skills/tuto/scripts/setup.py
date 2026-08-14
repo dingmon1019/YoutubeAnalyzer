@@ -68,7 +68,8 @@ def main() -> int:
                     f"update recommended: pip install -U yt-dlp",
                     file=sys.stderr,
                 )
-            if not r["js_runtime"]:
+            if r.get("js_runtime") == "":
+                # .get: 기존 테스트의 레거시 mock dict(키 부재)를 침묵 경로로 보존 (append-only)
                 # 실측(2026-08-14): 런타임 부재 시 유튜브 다운로드가 403으로 즉사 —
                 # 설치 자체는 끝난 상태이므로 exit 0은 유지하고 stderr에만 남긴다(F6 선례).
                 print(

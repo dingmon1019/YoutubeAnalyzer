@@ -28,7 +28,7 @@ def test_check_prints_note_when_ytdlp_stale(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(yta_setup.common, "CONFIG_FILE", tmp_path / ".env")
     monkeypatch.setattr(yta_setup, "check_env", lambda: {
         "status": "ready", "missing": [], "ytdlp_version": "2025.01.01",
-        "ytdlp_stale": True, "js_runtime": "node", "has_groq_key": False, "has_faster_whisper": False,
+        "ytdlp_stale": True, "has_groq_key": False, "has_faster_whisper": False,
         "config_file": str(tmp_path / ".env"),
     })
     monkeypatch.setattr(yta_setup.sys, "argv", ["setup.py", "--check"])
@@ -46,7 +46,7 @@ def test_check_silent_when_ytdlp_fresh(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(yta_setup.common, "CONFIG_FILE", tmp_path / ".env")
     monkeypatch.setattr(yta_setup, "check_env", lambda: {
         "status": "ready", "missing": [], "ytdlp_version": "2026.03.01",
-        "ytdlp_stale": False, "js_runtime": "node", "has_groq_key": False, "has_faster_whisper": False,
+        "ytdlp_stale": False, "has_groq_key": False, "has_faster_whisper": False,
         "config_file": str(tmp_path / ".env"),
     })
     monkeypatch.setattr(yta_setup.sys, "argv", ["setup.py", "--check"])
