@@ -190,7 +190,7 @@ def download(url: str, cd: Path) -> dict:
             # 403 2건 모두 android client 전환 1회로 해소. 조용한 폴백 금지 — NOTE를 남겨
             # 패스1 보고서에 실리게 한다.
             print(f"NOTE: media download failed once — retrying with android player client "
-                  f"({str(e).splitlines()[-1][:120]})")
+                  f"({(str(e).splitlines() or [str(e)])[-1][:120]})")
             common.run(_media_cmd(url, video_f, cd, sub_langs, js_rt, android=True),
                        timeout=1800)
 

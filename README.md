@@ -13,7 +13,7 @@ AI가 대신 영상을 보고, 자막과 화면을 함께 이해하고, 검증�
 
 [![Version](https://img.shields.io/badge/version-0.3.3-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-223%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-239%20passed-brightgreen.svg)](tests/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://claude.com/claude-code)
 [![Languages](https://img.shields.io/badge/video-KO%20%7C%20EN-orange.svg)](#)
 

@@ -63,7 +63,7 @@ user-invocable: true
 ## 0. 프리플라이트 (세션 첫 호출만)
 
 `python "<SKILL_DIR>/scripts/setup.py" --check`를 실행해 종료 코드를 확인한다.
-- 0이면 다음 단계로 조용히 진행한다. 단, stderr에 yt-dlp 최신성 NOTE(stale 경고)가 있으면
+- 0이면 다음 단계로 조용히 진행한다. 단, stderr에 NOTE가 있으면(yt-dlp 최신성·JS 런타임 부재 등)
   그 내용을 사용자에게 짧게 알린다 — exit 0이라도 stderr가 항상 비어 있는 건 아니다.
 - 2면 stderr에 출력된 설치 명령을 그대로 사용자에게 안내한다.
 

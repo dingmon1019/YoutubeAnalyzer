@@ -455,3 +455,36 @@ def test_main_non403_failure_no_hint_and_empty_message_safe(monkeypatch, capsys)
     out, err = capsys.readouterr()
     assert code == 4 and "HINT:" not in out
     assert "Traceback" not in out and "Traceback" not in err
+
+
+def test_download_fallback_attempts_exactly_two(tmp_path, monkeypatch):
+    """최종 리뷰 반영: 기존 전파 테스트는 '재시도 발생+전파'만 증명 — 시도 횟수 상한(정확히
+    2회, 재시도 루프 없음)을 호출 카운트로 못박는다 (기준점 2 완전 증명)."""
+    cd = tmp_path
+    (cd / "info.json").write_text('{"language": "en"}', encoding="utf-8")
+    calls = []
+
+    def always_fail(cmd, timeout=600):
+        calls.append(list(cmd))
+        raise RuntimeError("HTTP Error 403: Forbidden")
+
+    monkeypatch.setattr(analyze.common, "run", always_fail)
+    monkeypatch.setattr(analyze.common, "detect_js_runtime", lambda: "")
+    with pytest.raises(RuntimeError):
+        analyze.download("https://youtu.be/x0000000000", cd)
+    assert len(calls) == 2
+
+
+def test_main_timeout_reports_plain_text(monkeypatch, capsys):
+    """최종 리뷰 반영: TimeoutExpired 경로는 테스트 0건이었다 — RuntimeError와 동일하게
+    평문 FAILED + exit 4, traceback 없음을 고정한다."""
+    import subprocess as sp
+    monkeypatch.setattr(analyze, "run_pass1",
+                        lambda url: (_ for _ in ()).throw(
+                            sp.TimeoutExpired(cmd="yt-dlp", timeout=1800)))
+    monkeypatch.setattr(analyze.sys, "argv", ["analyze.py", "https://youtu.be/x0000000000"])
+    code = analyze.main()
+    out, err = capsys.readouterr()
+    assert code == 4
+    assert "=== YTA PASS1: FAILED ===" in out
+    assert "Traceback" not in out and "Traceback" not in err
