@@ -328,7 +328,7 @@ def main() -> int:
         if "403" in msg:
             print("HINT: JS 런타임(deno/node) 부재 가능 — setup.py --check의 NOTE 확인. "
                   "일시적 차단일 수 있으니 잠시 후 재실행도 유효하다.")
-        print(f"ERROR: pass1 failed — {msg.splitlines()[-1][:160]}", file=sys.stderr)
+        print(f"ERROR: pass1 failed — {(msg.splitlines() or [msg])[-1][:160]}", file=sys.stderr)
         return 4
 
 

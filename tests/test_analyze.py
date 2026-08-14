@@ -433,3 +433,25 @@ def test_main_reports_download_failure_as_plain_text(monkeypatch, capsys):
     assert code == 4
     assert "=== YTA PASS1: FAILED ===" in out and "ERROR:" in out
     assert "403" in out and "Traceback" not in out and "Traceback" not in err
+
+
+def test_main_403_failure_includes_hint(monkeypatch, capsys):
+    """HINT 분기 자체를 잡는다 — ERROR 줄의 '403'만으로 통과하지 않도록 'HINT:' 존재를 단언."""
+    monkeypatch.setattr(analyze, "run_pass1",
+                        lambda url: (_ for _ in ()).throw(
+                            RuntimeError("HTTP Error 403: Forbidden")))
+    monkeypatch.setattr(analyze.sys, "argv", ["analyze.py", "https://youtu.be/x0000000000"])
+    code = analyze.main()
+    out = capsys.readouterr().out
+    assert code == 4 and "HINT:" in out
+
+
+def test_main_non403_failure_no_hint_and_empty_message_safe(monkeypatch, capsys):
+    """403이 아니면 HINT 없음 + 빈 예외 메시지도 traceback 없이 평문 처리(IndexError 가드)."""
+    monkeypatch.setattr(analyze, "run_pass1",
+                        lambda url: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(analyze.sys, "argv", ["analyze.py", "https://youtu.be/x0000000000"])
+    code = analyze.main()
+    out, err = capsys.readouterr()
+    assert code == 4 and "HINT:" not in out
+    assert "Traceback" not in out and "Traceback" not in err
