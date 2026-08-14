@@ -1,5 +1,6 @@
 """자막 사슬: VTT 파싱·롤링 중복 제거 + Groq/로컬 Whisper 사슬·환각 방어. §5 P5/P6."""
 import argparse
+import html
 import json
 import mimetypes
 import re
@@ -43,7 +44,7 @@ def parse_vtt(text: str) -> list:
                 cues.append(cur)
             cur = None
         elif cur is not None:
-            clean = _INLINE.sub("", line).strip()
+            clean = html.unescape(_INLINE.sub("", line)).replace("\xa0", " ").strip()
             if clean and not clean.startswith(("WEBVTT", "Kind:", "Language:")):
                 cur["text"] = (cur["text"] + "\n" + clean).strip() if cur["text"] else clean
     if cur and cur["text"]:

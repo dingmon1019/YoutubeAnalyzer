@@ -253,3 +253,16 @@ def test_groq_transcribe_offset_uses_probed_duration(monkeypatch):
     assert len(segs) == 2
     assert segs[1]["start"] == 1197.5
     assert segs[1]["start"] != 1200.0
+
+
+def test_parse_vtt_unescapes_html_entities():
+    """실측(2026-08-14, 0chZFIZLR_0): 자막의 &nbsp;가 그대로 남아 video.md 인용까지
+    전파될 뻔했다. 엔티티는 마크업 잔재이지 '원문 오타 보존' 대상이 아니다."""
+    vtt = ("WEBVTT\n\n"
+           "00:01.000 --> 00:03.000\n"
+           "To sum it up, git merge&nbsp;&nbsp;gives &amp; keeps\n")
+    cues = transcribe.parse_vtt(vtt)
+    assert len(cues) == 1
+    assert "&nbsp;" not in cues[0]["text"] and "&amp;" not in cues[0]["text"]
+    assert "\xa0" not in cues[0]["text"]          # 비분리 공백도 일반 공백으로
+    assert "gives & keeps" in cues[0]["text"]
