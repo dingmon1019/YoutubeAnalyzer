@@ -2,6 +2,7 @@
 import argparse
 import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -316,7 +317,19 @@ def main() -> int:
         return 0
     if not args.url:
         ap.error("url required")
-    return run_pass1(args.url)
+    try:
+        return run_pass1(args.url)
+    except (RuntimeError, subprocess.TimeoutExpired) as e:
+        # design §9 fail-loud: traceback 금지 — 원인 요약과 다음 행동만 평문으로.
+        # stdout은 pass1-report.txt로 리다이렉트될 수 있어 stderr에도 한 줄 미러한다.
+        msg = str(e)[:600]
+        print("=== YTA PASS1: FAILED ===")
+        print(f"ERROR: {msg}")
+        if "403" in msg:
+            print("HINT: JS 런타임(deno/node) 부재 가능 — setup.py --check의 NOTE 확인. "
+                  "일시적 차단일 수 있으니 잠시 후 재실행도 유효하다.")
+        print(f"ERROR: pass1 failed — {msg.splitlines()[-1][:160]}", file=sys.stderr)
+        return 4
 
 
 if __name__ == "__main__":

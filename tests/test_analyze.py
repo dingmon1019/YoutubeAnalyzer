@@ -419,3 +419,17 @@ def test_download_second_failure_propagates(tmp_path, monkeypatch):
     monkeypatch.setattr(analyze.common, "detect_js_runtime", lambda: "")
     with pytest.raises(RuntimeError):
         analyze.download("https://youtu.be/x0000000000", cd)
+
+
+def test_main_reports_download_failure_as_plain_text(monkeypatch, capsys):
+    """design §9: traceback 금지. 실측(2026-08-14)에서는 403이 raw traceback으로 터졌다 —
+    평문 ERROR + exit 4 + 403 힌트로 바뀌어야 한다."""
+    monkeypatch.setattr(analyze, "run_pass1",
+                        lambda url: (_ for _ in ()).throw(
+                            RuntimeError("command failed (1): yt-dlp ...\nHTTP Error 403: Forbidden")))
+    monkeypatch.setattr(analyze.sys, "argv", ["analyze.py", "https://youtu.be/x0000000000"])
+    code = analyze.main()
+    out, err = capsys.readouterr()
+    assert code == 4
+    assert "=== YTA PASS1: FAILED ===" in out and "ERROR:" in out
+    assert "403" in out and "Traceback" not in out and "Traceback" not in err
