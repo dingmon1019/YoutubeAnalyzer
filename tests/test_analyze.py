@@ -2,6 +2,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "tuto" / "scripts"))
 import analyze
 import evidence
@@ -371,3 +373,49 @@ def test_run_pass1_writes_evidence_skeleton(monkeypatch, tmp_path, capsys):
     assert "== EVIDENCE ==" in out
     assert "EVIDENCE_FILE" in out
     assert "TYPE_HINT" in out
+
+
+def test_media_cmd_flags(tmp_path):
+    """js_rt가 node/bun일 때만 --js-runtimes를 넣는다(deno는 yt-dlp 기본 활성이라 불필요)."""
+    cmd = analyze._media_cmd("URL", tmp_path / "v.mp4", tmp_path, "en", js_rt="node")
+    assert "--js-runtimes" in cmd and cmd[cmd.index("--js-runtimes") + 1] == "node"
+    cmd = analyze._media_cmd("URL", tmp_path / "v.mp4", tmp_path, "en", js_rt="deno")
+    assert "--js-runtimes" not in cmd
+    cmd = analyze._media_cmd("URL", tmp_path / "v.mp4", tmp_path, "en", android=True)
+    assert "--extractor-args" in cmd
+    assert cmd[cmd.index("--extractor-args") + 1] == "youtube:player_client=android"
+    assert "--no-playlist" in cmd  # 기존 플래그 보존
+
+
+def test_download_falls_back_to_android_once(tmp_path, monkeypatch, capsys):
+    """실측(2026-08-14, tukOm3Afd8s): 403이 android client 전환 1회로 풀렸다.
+    재시도 루프 금지 관례에 따라 방법 전환은 정확히 1회, 흔적은 NOTE로 남는다."""
+    cd = tmp_path
+    (cd / "info.json").write_text('{"language": "en"}', encoding="utf-8")
+    calls = []
+
+    def fake_run(cmd, timeout=600):
+        calls.append([str(c) for c in cmd])
+        if len(calls) == 1:
+            raise RuntimeError("command failed (1): yt-dlp ...\nHTTP Error 403: Forbidden")
+
+    monkeypatch.setattr(analyze.common, "run", fake_run)
+    monkeypatch.setattr(analyze.common, "detect_js_runtime", lambda: "node")
+    analyze.download("https://youtu.be/x0000000000", cd)
+    assert len(calls) == 2
+    assert "youtube:player_client=android" in calls[1]
+    assert "NOTE" in capsys.readouterr().out  # 조용한 폴백 금지
+
+
+def test_download_second_failure_propagates(tmp_path, monkeypatch):
+    """폴백은 1회뿐 — 두 번째 실패는 그대로 전파돼 fail-loud 경로(Task 4)로 간다."""
+    cd = tmp_path
+    (cd / "info.json").write_text('{"language": "en"}', encoding="utf-8")
+
+    def always_fail(cmd, timeout=600):
+        raise RuntimeError("HTTP Error 403: Forbidden")
+
+    monkeypatch.setattr(analyze.common, "run", always_fail)
+    monkeypatch.setattr(analyze.common, "detect_js_runtime", lambda: "")
+    with pytest.raises(RuntimeError):
+        analyze.download("https://youtu.be/x0000000000", cd)

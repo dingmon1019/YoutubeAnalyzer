@@ -133,6 +133,23 @@ def _sub_langs_for(lang: str, info: dict = None) -> str:
     return ",".join(seen)
 
 
+def _media_cmd(url, video_f, cd, sub_langs, js_rt: str = "", android: bool = False) -> list:
+    """미디어+자막 yt-dlp 명령 구성. deno는 yt-dlp가 자동 사용하므로 node/bun만 명시한다."""
+    cmd = ["yt-dlp", url]
+    if js_rt in ("node", "bun"):
+        cmd += ["--js-runtimes", js_rt]
+    if android:
+        cmd += ["--extractor-args", "youtube:player_client=android"]
+    cmd += [
+        "-f", "bv*[height<=720]+ba/b[height<=720]", "--merge-output-format", "mp4",
+        "-o", str(video_f),
+        "--write-subs", "--write-auto-subs", "--sub-langs", sub_langs,
+        "--sub-format", "vtt", "-o", f"subtitle:{cd / 'subs'}",
+        "--no-playlist", "--no-progress",
+    ]
+    return cmd
+
+
 def download(url: str, cd: Path) -> dict:
     """yt-dlp 720p+info.json+자막(원어, auto 포함) 한 번에. info.json 반환. 이미 있으면 재사용.
 
@@ -164,14 +181,17 @@ def download(url: str, cd: Path) -> dict:
     if not video_f.exists():
         # 2단계: 실제 미디어 + 자막. language는 1단계(또는 기존 info.json)에서 확인한 값.
         sub_langs = _sub_langs_for(info.get("language"), info)
-        common.run([
-            "yt-dlp", url,
-            "-f", "bv*[height<=720]+ba/b[height<=720]", "--merge-output-format", "mp4",
-            "-o", str(video_f),
-            "--write-subs", "--write-auto-subs", "--sub-langs", sub_langs,
-            "--sub-format", "vtt", "-o", f"subtitle:{cd / 'subs'}",
-            "--no-playlist", "--no-progress",
-        ], timeout=1800)
+        js_rt = common.detect_js_runtime()
+        try:
+            common.run(_media_cmd(url, video_f, cd, sub_langs, js_rt), timeout=1800)
+        except RuntimeError as e:
+            # 재시도 루프가 아니라 방법 전환 1회다(§9 재시도 금지와 구분). 실측(2026-08-14):
+            # 403 2건 모두 android client 전환 1회로 해소. 조용한 폴백 금지 — NOTE를 남겨
+            # 패스1 보고서에 실리게 한다.
+            print(f"NOTE: media download failed once — retrying with android player client "
+                  f"({str(e).splitlines()[-1][:120]})")
+            common.run(_media_cmd(url, video_f, cd, sub_langs, js_rt, android=True),
+                       timeout=1800)
 
     return info
 
