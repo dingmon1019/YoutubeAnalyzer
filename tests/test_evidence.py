@@ -910,3 +910,9 @@ def test_cross_check_promotion_is_capped_at_one():
     got = [c["id"] for c in evidence.audit_candidates(ev, limit=3)]
     assert got[0] in ("k2", "k3"), "flag된 항목 1건은 최상위로 승격된다"
     assert "k1" in got[:2], "나머지 슬롯은 행동 영향도 순서(command)가 차지해야 한다"
+
+
+def test_audit_candidates_default_limit_is_three():
+    """라운드5 이월: SKILL.md는 3건으로 고정했는데 기본값이 6이면 인자 없는 호출이 조용히 6으로 회귀한다."""
+    import inspect
+    assert inspect.signature(evidence.audit_candidates).parameters["limit"].default == 3

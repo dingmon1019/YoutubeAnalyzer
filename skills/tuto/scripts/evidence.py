@@ -491,7 +491,7 @@ def apply_verdicts(ev: dict, verdicts: list) -> dict:
     return ev
 
 
-def audit_candidates(ev: dict, limit: int = 6) -> list:
+def audit_candidates(ev: dict, limit: int = 3) -> list:
     """표본 감사 후보를 뽑는다 — claims와 knowledge_items 통합.
 
     **모든 항목을 감사하지 않는다.** 표본 감사 원칙을 유지하되, 호출한 에이전트의
