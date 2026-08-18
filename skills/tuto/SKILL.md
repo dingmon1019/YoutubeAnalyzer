@@ -48,30 +48,32 @@ Read하고, 같은 응답에서 확대 지점을 판정한다:
 `evidence.py "<cache_dir>" --add-frames "<cache_dir>/zoom-out.txt"` → 새 프레임을
 **한 응답에서 병렬** Read. 판독이 흐리면 `zoom.py <id> --crop "<프레임>@x,y,w,h"` **1회만**.
 
-**4. evidence.** `<cache_dir>/evidence-patch.json`을 **한 번에 Write** →
-`evidence.py "<cache_dir>" --merge <patch>`. exit 2면 stderr의 INVALID를 보고 1회 수정.
+**4. evidence.** `<cache_dir>/patch.lines`를 **한 번에 Write** (TAB 구분, 첫 필드가
+레코드 종류 T/V/K/C/G) →
+`evidence.py "<cache_dir>" --from-lines "<cache_dir>/patch.lines"`. 확장 결과는 기존
+`--merge` 검증 게이트를 그대로 탄다. exit 2면 stderr의 INVALID를 보고 1회 수정.
 
-```json
-{"video_type": {"primary": "tutorial", "confidence": "high", "basis": "..."},
- "visual_evidence": [{"type": "ui", "value": "화면 문자열 그대로 (오타도 그대로)",
-   "timestamp": 132.0, "frame": "t0212_1024.jpg", "confidence": "high"}],
- "claims": [{"claim": "한 문장", "timestamp": 132.0,
-   "evidence": [{"source": "frame", "ref": "v1"}, {"source": "transcript", "ref": "12"}],
-   "conflict": {"transcript": "16배", "screen": "16.3x"},
-   "verification": {"status": "unaudited"}}],
- "knowledge_items": [{"type": "command", "content": "pip install -U yt-dlp",
-   "timestamp": 88.0, "evidence": [{"source": "frame", "ref": "v2"}]}],
- "gaps": [{"start": 350.0, "end": 469.0, "reason": "지도 공백"}]}
 ```
+T	tutorial	high	근거 한 줄
+V	ui	132.0	t0212_1024.jpg	high	화면에서 읽은 문자열 그대로
+K	command	88.0	v1;t12	pip install -U yt-dlp
+C	132.0	v1;t12	주장 한 문장	conflict=16배=>16.3x
+G	350.0	469.0	지도 공백
+```
+
+`V`의 id는 등장 순서대로 v1..vN이 **자동 부여**된다 — 너는 id를 쓰지 않는다. `K`/`C`의
+근거 필드는 `;` 구분 로컬 참조만 쓴다(`v#`=frame, `t#`=transcript, 예: `v1;t12`). `C`의
+5번째 필드(conflict, 선택)는 `conflict=자막값=>화면값` 형식. 값 내부의 탭은 작성 시
+스페이스로 치환한다.
 
 규칙 — 어길 시 merge가 거부한다:
 - 화면에서 또렷이 읽히지 않는 값은 쓰지 않는다. 불확실하면 `⚠️ 화면 확인 필요 (t=MM:SS)`. 추측 금지.
-- 자막값 ≠ 화면값이면 **화면을 우선**하고 `conflict`에 둘 다 적는다.
-- `knowledge_items.content`는 행동 가능한 수준("Add Python to PATH를 체크한다").
+- 자막값 ≠ 화면값이면 **화면을 우선**하고 conflict 필드에 둘 다 적는다(자막=>화면 순).
+- `K`의 마지막 필드(content)는 행동 가능한 수준으로("Add Python to PATH를 체크한다").
   type: concept·procedure·action·command·setting·prerequisite·result·criterion·warning·example·comparison. 영상에 있는 것만.
-- `transcript` ref는 pass1 보고서 자막 인덱스(0부터). `source: "both"`는 없다.
-- **`gaps`는 시간 구간 객체만** — 산문 노트는 video.md의 `## 누락 후보`로.
-- `verification.status`는 전부 `unaudited`로 둔다.
+- `t#` ref는 pass1 보고서 자막 인덱스(0부터).
+- **`gaps`는 시간 구간 객체만** — 산문 노트는 video.md의 `## 누락 후보`로. `G` 레코드 외 형식 금지.
+- `verification.status`는 확장 시 자동으로 `unaudited`가 붙는다 — 네가 쓰지 않는다.
 
 **5. 교차 대조.** `evidence.py "<cache_dir>" --cross-check` — 해시·수치 판독이 갈린
 자리를 비용 0으로 찾는다. CROSSCHECK가 나오면 해당 프레임만 다시 보고 값을 확정해 merge로 정정한다.
@@ -84,12 +86,10 @@ Read하고, 같은 응답에서 확대 지점을 판정한다:
 자막이 없는 영상(STATUS flags의 no transcript)은 이 단계를 생략하고 검증 스탬프에 명시한다
 — 체크리스트의 원천이 없다.
 
-**7. video.md — 한 번에 Write.** Edit 반복 금지(고칠 게 있으면 전체 재작성). 구조는
-영상에 맞춰 자율 구성하되 필수 요소:
-- 헤더: 제목·URL·길이·자막 출처·영상유형 + **"표본 감사 미실시 — 근거는 프레임·자막으로
-  추적 가능하나 독립 검증되지 않음"**
-- 모든 값·명령어에 `(t=MM:SS)` 근거, "화면 확인"/"자막 근거만" 구분, 불일치 병기
-- `## 누락 후보`, `## 검증 스탬프`(교차 대조 결과 + 커버리지 보강 건수)
+**7. video.md — 코드가 생성한다.**
+`evidence.py "<cache_dir>" --render --cross-flags <5단계 flag 수> --coverage-added <6단계 보강 수>`
+문서는 evidence.json의 결정론적 렌더링이며 "표본 감사 미실시" 명시를 포함한다.
+네가 문서를 다시 쓰거나 Edit하지 마라 — 고칠 것이 있으면 evidence를 고치고 다시 render한다.
 
 **8. 응답.** 요약(영상유형·핵심 지식·⚠️ 건수) + 두 산출물 경로. 자연어 요청이 있었으면
 **곧바로 이어서 수행한다.**
@@ -98,9 +98,9 @@ Read하고, 같은 응답에서 확대 지점을 판정한다:
 
 `cache_read`는 콜마다 이전 컨텍스트 전체를 재청구한다(실측: 순차 Read 41콜 $3.26 vs
 병렬 4콜 $0.47). **프레임은 한 응답에서 병렬 Read, 문서는 한 번에 Write, 독립된 셸 명령은 `&&`로 연쇄해
-한 콜로 묶는다(예: zoom 추출과 --add-frames, --cross-check와 --coverage-input). 전체
-20콜 이내를 목표로 하되, 초과했더라도 남은 단계를 생략하지 말고 완주한다 — 콜 절약보다
-산출물 완결이 우선이다.**
+한 콜로 묶는다(예: zoom 추출과 --add-frames, --from-lines와 --cross-check, --coverage-input과
+--render). 전체 20콜 이내를 목표로 하되, 초과했더라도 남은 단계를 생략하지 말고 완주한다 —
+콜 절약보다 산출물 완결이 우선이다.**
 
 ## 후속 질문
 

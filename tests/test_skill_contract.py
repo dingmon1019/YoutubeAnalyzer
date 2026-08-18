@@ -83,3 +83,11 @@ def test_frontmatter_present():
     assert "user-invocable: true" in head
     assert "description:" in head
     assert "allowed-tools:" in head
+
+
+def test_render_and_lines_wired():
+    """코드 대체 라운드: 문서 생성은 --render, patch는 --from-lines — LLM이 JSON·문서를
+    직접 쓰던 시대의 지시가 남아 있으면 안 된다."""
+    assert "--render" in TEXT
+    assert "--from-lines" in TEXT
+    assert "evidence-patch.json" not in TEXT
