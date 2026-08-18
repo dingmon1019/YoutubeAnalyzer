@@ -400,8 +400,13 @@ python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --merge "<cache_dir>/evid
 후보는 손으로 고르지 말고 스크립트로 뽑는다:
 
 ```
-python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --audit-candidates 6
+python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --audit-candidates 3
 ```
+
+**정확히 3건이다 — 늘리지 않는다.** 실측(2026-08-18) 주입 오류 시험에서 표본 6건과 3건의
+검출력이 같았다(주입 6건 중 각각 1건 포함). 반면 같은 실측에서 오케스트레이터가 표본을 8건으로
+늘리고 재검까지 돌려 서브에이전트가 8→13건이 되면서 비용이 11% 늘었다. 애매해 보인다고 후보를
+추가하지 마라 — 표본 감사는 전수 검증이 아니라 표본이고, 늘려도 검출력은 거의 오르지 않는다.
 
 `id·kind·type·근거·내용`이 탭 구분으로 나온다. 정렬은 **행동 영향도 순**이다 —
 `command` `setting` `action` `criterion` `prerequisite` `warning` `procedure` `result`
@@ -521,7 +526,7 @@ python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --verdicts "<cache_dir>/v
 
 결과는 이 형식의 스탬프로 남긴다:
 
-`📋 표본 감사: 고위험 지식·주장 6건 중 6 일치 — Sonnet 6건 판정 + 상위 모델 재검 0건 / 커버리지: 기대 지식 12건 중 누락 후보 1건 (시각 관측 N건 대조 포함) (검증 범위: 설정값·버튼명·수치·명령어·순서·서식변화·커버리지)`
+`📋 표본 감사: 고위험 지식·주장 3건 중 3 일치 — Sonnet 3건 판정 + 상위 모델 재검 0건 / 커버리지: 기대 지식 12건 중 누락 후보 1건 (시각 관측 N건 대조 포함) (검증 범위: 설정값·버튼명·수치·명령어·순서·서식변화·커버리지)`
 
 ## 6. 외부 GT diff
 

@@ -243,3 +243,12 @@ def test_skill_has_no_stale_20_frame_cap_reference():
     """실측 회귀 방지: 루브릭이 8장으로 내려갔는데 §2의 다른 지시가 '상한(20장)'을 참조하면
     오케스트레이터가 재지시로 20장까지 되돌린다 — 절감이 통째로 무효가 된다."""
     assert "상한(20장)" not in TEXT
+
+
+# ── 표본 감사 건수 고정 (2026-08-18 주입 시험: 6건과 3건의 검출력 동일) ──
+
+def test_skill_fixes_audit_sample_at_three():
+    """오케스트레이터가 표본을 임의로 늘려 비용이 11% 증가한 실측이 있다 — 건수를 못박는다."""
+    assert "--audit-candidates 3" in TEXT
+    assert "정확히 3건이다 — 늘리지 않는다" in TEXT
+    assert "--audit-candidates 6" not in TEXT
