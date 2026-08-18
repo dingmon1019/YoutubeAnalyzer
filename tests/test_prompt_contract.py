@@ -95,3 +95,16 @@ class TestParallelReadContract:
     # 한다 — TRANSCRIBE의 병렬 Read는 test_parallel_read_required가 이미 검증한다.
     def test_synthesize_reads_inputs_in_parallel(self):
         assert "병렬 Read" in SYNTHESIZE
+
+
+class TestVisionRichnessContract:
+    # 실측 교훈(2026-08-19): V 43→10 빈약화가 하류의 자막 의존 오독을 낳았다
+    def test_one_value_per_v_line(self):
+        assert "값 하나당 V 한 줄" in TRANSCRIBE
+
+
+class TestTranscriptOnlyValueContract:
+    # 실측 오독 2건(settings.js·preferredNotChannel)의 공통 기전 차단
+    def test_transcript_only_values_get_warning(self):
+        assert "자막에서만 나온 구체값" in SYNTHESIZE
+        assert "⚠️ 화면 확인 필요" in SYNTHESIZE
