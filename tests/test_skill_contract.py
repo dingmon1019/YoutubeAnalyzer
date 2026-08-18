@@ -224,3 +224,16 @@ def test_skill_forbids_repeated_edit_on_video_md():
 def test_skill_caps_coverage_audit_frame_reads():
     """커버리지 감사가 자율적으로 프레임 15장을 열어 $0.58을 썼다 — 상한이 있어야 한다."""
     assert "프레임은 3장 이내" in TEXT
+
+
+# ── 확대 예산 (2026-08-18: 확대 19장이 빌더·감사 컨텍스트에 상주해 비용을 키웠다) ──
+
+def test_skill_zoom_budget_is_reduced():
+    """1024 상한 8장·확대 총 12장. 예산을 낮춰 상주 컨텍스트를 줄인다."""
+    assert "1024px 확대는 총 8장" in TEXT
+    assert "확대 프레임(재확대·Q&A 포함)은 12장" in TEXT
+
+
+def test_skill_keeps_map_frame_budget_untouched():
+    """지도 프레임은 이미 하한(12) 근처라 줄이지 않는다는 근거가 남아야 한다."""
+    assert "지도 프레임 수는 줄이지 않는다" in TEXT
