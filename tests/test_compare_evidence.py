@@ -38,3 +38,38 @@ def test_fails_when_knowledge_drops_too_far():
     """지식 항목이 80% 미만으로 떨어지면 게이트 위반이다."""
     r = compare.compare(_ev(["x"], knowledge=10), _ev(["x"], knowledge=7))
     assert r["passed"] is False
+
+
+def test_warn_delta_over_threshold_fails_gate():
+    """⚠️ 화면 확인 필요가 +3건이면 게이트 위반 (허용치 +2)."""
+    before = {"visual_evidence": [{"id": "v1", "value": "ok"}],
+              "knowledge_items": [{"id": "k1"}]}
+    after = {"visual_evidence": [{"id": "v1", "value": "ok"},
+                                 {"id": "v2", "value": "⚠️ 화면 확인 필요 (t=01:00)"},
+                                 {"id": "v3", "value": "⚠️ 화면 확인 필요 (t=02:00)"},
+                                 {"id": "v4", "value": "⚠️ 화면 확인 필요 (t=03:00)"}],
+             "knowledge_items": [{"id": "k1"}]}
+    r = compare.compare(before, after)
+    assert r["warn_delta"] == 3
+    assert r["passed"] is False
+
+
+def test_duplicate_values_collapse_is_visible():
+    """같은 값 3건이 1건으로 줄면 values_lost로 드러나야 한다 (set 붕괴 결함 회귀)."""
+    before = {"visual_evidence": [{"id": f"v{i}", "value": "50d1d83 base"} for i in range(3)],
+              "knowledge_items": [{"id": "k1"}]}
+    after = {"visual_evidence": [{"id": "v1", "value": "50d1d83 base"}],
+             "knowledge_items": [{"id": "k1"}]}
+    r = compare.compare(before, after)
+    assert r["values_lost"] == 2
+
+
+def test_one_new_value_is_not_counted_twice():
+    """새 값 하나가 사라진 값 여러 건과 짝지어져 중복 계상되면 안 된다."""
+    before = {"visual_evidence": [{"id": "v1", "value": "commit 3f4a625x"},
+                                  {"id": "v2", "value": "commit 3f4a625y"}],
+              "knowledge_items": [{"id": "k1"}]}
+    after = {"visual_evidence": [{"id": "v1", "value": "commit 3f4a625z"}],
+             "knowledge_items": [{"id": "k1"}]}
+    r = compare.compare(before, after)
+    assert r["value_mismatch"] == 1

@@ -9,14 +9,28 @@
 import argparse
 import json
 import sys
+from collections import Counter
 
 KNOWLEDGE_FLOOR = 0.8   # 지식 항목 유지율 하한
 WARN_DELTA_MAX = 2      # "⚠️ 화면 확인 필요" 증가 허용치
 
 
+def _utf8_stdout() -> None:
+    """cp949 콘솔에서 한글·⚠️ 출력이 UnicodeEncodeError로 죽는 것을 막는다.
+    skills/tuto/scripts/common.py의 utf8_stdout과 같은 처리 — docs/eval 도구는
+    모듈 독립성 때문에 common을 임포트하지 않고 최소 복제한다."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
 def _values(ev):
-    return {ve.get("value", "") for ve in (ev.get("visual_evidence") or [])
-            if isinstance(ve, dict)}
+    """중복을 보존한다 — set으로 접으면 같은 값 3건이 1건으로 줄어도 신호가 없다."""
+    return [ve.get("value", "") for ve in (ev.get("visual_evidence") or [])
+            if isinstance(ve, dict)]
 
 
 def _warn_count(ev):
@@ -27,18 +41,27 @@ def _warn_count(ev):
     return n
 
 
+def _looks_like_same_value(a: str, b: str) -> bool:
+    """같은 화면 값의 판독이 갈린 것으로 보이는가 (오독 후보)."""
+    return a != b and abs(len(a) - len(b)) <= 2 and (a[:6] == b[:6] or a[-6:] == b[-6:])
+
+
 def compare(before: dict, after: dict) -> dict:
     """값 불일치·지식 유지율·경고 증가를 계산하고 게이트 통과 여부를 판정한다.
 
-    값 불일치는 "개선 전 값이 사라졌는데 편집거리가 가까운 다른 값이 생긴" 경우로 센다.
-    단순 누락(값이 통째로 사라짐)은 지식 유지율 쪽에서 잡히므로 여기서 이중 계상하지 않는다."""
-    bv, av = _values(before), _values(after)
-    lost, gained = bv - av, av - bv
+    값 불일치는 "개선 전 값이 사라졌는데 판독이 갈린 것으로 보이는 값이 새로 생긴" 경우다.
+    매칭된 새 값은 소비해 하나가 여러 건으로 중복 계상되지 않게 한다. 통째로 사라진 값은
+    불일치가 아니라 values_lost로 따로 센다 — 프레임 축소로 인한 예상된 감소와 판독 오류를
+    섞으면 게이트가 무엇을 잡았는지 알 수 없다."""
+    bc, ac = Counter(_values(before)), Counter(_values(after))
+    lost = list((bc - ac).elements())
+    pool = list((ac - bc).elements())
     mismatch = 0
     for l in lost:
-        for g in gained:
-            if l != g and abs(len(l) - len(g)) <= 2 and (l[:6] == g[:6] or l[-6:] == g[-6:]):
+        for i, g in enumerate(pool):
+            if _looks_like_same_value(l, g):
                 mismatch += 1
+                pool.pop(i)
                 break
     kb = len(before.get("knowledge_items") or [])
     ka = len(after.get("knowledge_items") or [])
@@ -46,7 +69,8 @@ def compare(before: dict, after: dict) -> dict:
     warn_delta = _warn_count(after) - _warn_count(before)
     return {
         "value_mismatch": mismatch,
-        "values_before": len(bv), "values_after": len(av),
+        "values_before": len(list(bc.elements())), "values_after": len(list(ac.elements())),
+        "values_lost": len(lost) - mismatch,
         "knowledge_before": kb, "knowledge_after": ka, "knowledge_ratio": ratio,
         "warn_delta": warn_delta,
         "passed": mismatch == 0 and ratio >= KNOWLEDGE_FLOOR and warn_delta <= WARN_DELTA_MAX,
@@ -54,6 +78,7 @@ def compare(before: dict, after: dict) -> dict:
 
 
 def main() -> int:
+    _utf8_stdout()
     ap = argparse.ArgumentParser()
     ap.add_argument("--before", required=True)
     ap.add_argument("--after", required=True)
@@ -65,6 +90,7 @@ def main() -> int:
     r = compare(before, after)
     print(f"값 항목      {r['values_before']} → {r['values_after']}")
     print(f"값 불일치    {r['value_mismatch']}건  (게이트: 0)")
+    print(f"값 소실      {r['values_lost']}건  (참고용, 게이트 아님)")
     print(f"지식 항목    {r['knowledge_before']} → {r['knowledge_after']}  "
           f"유지율 {r['knowledge_ratio']:.0%}  (게이트: {KNOWLEDGE_FLOOR:.0%})")
     print(f"⚠️ 증감      {r['warn_delta']:+}건  (게이트: +{WARN_DELTA_MAX} 이내)")
