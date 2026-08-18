@@ -72,3 +72,12 @@ def test_gaps_are_time_ranges():
 
 def test_skill_doc_stays_small():
     assert len(TEXT) < 7000, f"SKILL.md {len(TEXT)}자 — 7,000자 상한 초과"
+
+
+def test_frontmatter_present():
+    """frontmatter가 없으면 스킬 등록·트리거링이 깨진다 — solo 전환 때 실제로 빠뜨렸던 결함."""
+    assert TEXT.startswith("---\n")
+    head = TEXT.split("---", 2)[1]
+    assert "name: tuto" in head
+    assert "argument-hint" in head
+    assert "user-invocable: true" in head
