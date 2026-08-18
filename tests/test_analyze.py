@@ -18,7 +18,7 @@ SIG = {
 
 def test_allocate_count_formula():
     ts = analyze.allocate_map_budget(1800.0, SIG)   # 30분
-    assert len(ts) == 36
+    assert len(ts) == 16
 
 
 def test_allocate_includes_chapter_starts_and_ends():
@@ -47,7 +47,7 @@ def test_allocate_zero_duration_returns_empty():
 def test_allocate_short_video_respects_invariants():
     ts = sorted(analyze.allocate_map_budget(10.0, SIG))
     assert all(0 <= t <= 10.0 for t in ts)
-    n = min(40, max(12, round(10.0 / 60 * 1.2)))
+    n = min(16, max(6, round(10.0 / 60 * 0.7)))
     min_gap = max(8.0, 10.0 / n / 2)
     assert all(b - a >= min_gap * 0.99 for a, b in zip(ts, ts[1:]))
     assert len(ts) >= 1  # at least the start anchor survives
@@ -55,7 +55,7 @@ def test_allocate_short_video_respects_invariants():
 
 def test_allocate_normal_duration_unchanged():
     ts = analyze.allocate_map_budget(1800.0, SIG)
-    assert len(ts) == 36
+    assert len(ts) == 16
     assert any(abs(t - 1.0) < 0.5 for t in ts) and any(abs(t - 1798.0) < 1 for t in ts)
 
 
@@ -133,7 +133,7 @@ def test_allocate_extra_grows_pool_via_grid_when_signal_is_sparse():
     """그리드가 n 고정이면(수정 전) 활동피크가 몰린 실제 영상에서 extra가 후보를 못 늘려
     12->12로 정체했다 — PASS1 실측(PlMpk-If9jA)에서 map_frames가 11로 보고된 근본 원인."""
     base = analyze.allocate_map_budget(352.0, CLUSTERED_SIG)
-    assert len(base) == 12
+    assert len(base) == 6
     grown = analyze.allocate_map_budget(352.0, CLUSTERED_SIG, extra=1)
     assert len(grown) > len(base)
 
@@ -144,7 +144,7 @@ def test_extract_map_frames_backfills_when_dedup_drops_below_floor(monkeypatch, 
     CLUSTERED_SIG는 그 영상의 실측 활동피크 그대로라 그리드 보강 경로까지 실제로 탄다."""
     duration = 352.0
     target = len(analyze.allocate_map_budget(duration, CLUSTERED_SIG))
-    assert target == 12  # 이 케이스의 전제 조건(짧은 영상 floor) — 깨지면 테스트 자체를 재검토
+    assert target == 6  # 이 케이스의 전제 조건(짧은 영상 floor) — 깨지면 테스트 자체를 재검토
 
     def fake_extract(video, timestamps, res, out_dir):
         return [Path(f"t{t:.2f}") for t in timestamps]
@@ -172,7 +172,7 @@ def test_extract_map_frames_keeps_best_round_when_later_round_is_worse(monkeypat
     라운드1(11장)보다 못한 라운드2(9장)가 최종값으로 나가버린다."""
     duration = 352.0
     target = len(analyze.allocate_map_budget(duration, CLUSTERED_SIG))
-    assert target == 12  # 이 케이스의 전제 조건 — 깨지면 테스트 자체를 재검토
+    assert target == 6  # 이 케이스의 전제 조건 — 깨지면 테스트 자체를 재검토
 
     def fake_extract(video, timestamps, res, out_dir):
         return [Path(f"t{t:.2f}") for t in timestamps]
@@ -182,16 +182,16 @@ def test_extract_map_frames_keeps_best_round_when_later_round_is_worse(monkeypat
     def fake_dedup(paths, threshold=2.0):
         calls["n"] += 1
         if calls["n"] == 1:
-            kept = paths[:11]           # 라운드1: 12 -> 11 (실측 t0550 케이스와 동형)
+            kept = paths[:5]            # 라운드1: 6 -> 5 (실측 t0550 케이스와 동형, solo 모드 floor=6)
         else:
-            kept = paths[:9]            # 이후 라운드: 후보가 늘었는데도 오히려 9로 퇴보
+            kept = paths[:3]            # 이후 라운드: 후보가 늘었는데도 오히려 3으로 퇴보
         return kept, len(paths) - len(kept)
 
     monkeypatch.setattr(analyze.frames, "extract_frames", fake_extract)
     monkeypatch.setattr(analyze.frames, "dedup_frames", fake_dedup)
 
     kept, dropped = analyze.extract_map_frames(Path("video.mp4"), duration, CLUSTERED_SIG, tmp_path)
-    assert len(kept) == 11  # 라운드1(더 나은 결과)이 유지돼야 함 — 라운드2의 9로 퇴보 금지
+    assert len(kept) == 5  # 라운드1(더 나은 결과)이 유지돼야 함 — 라운드2의 3으로 퇴보 금지
 
 
 def test_allocate_extra_never_exceeds_spec_ceiling():
@@ -202,9 +202,9 @@ def test_allocate_extra_never_exceeds_spec_ceiling():
         "chapters": [], "heatmap": [], "sponsorblock": [],
         "activity": {"curve": [], "peaks": list(range(5, 2000, 3))},
     }
-    assert len(analyze.allocate_map_budget(2000.0, dense)) == 40  # 전제조건: n=40(상한)
+    assert len(analyze.allocate_map_budget(2000.0, dense)) == 16  # 전제조건: n=16(상한)
     for extra in (0, 1, 10, 100, 1000):
-        assert len(analyze.allocate_map_budget(2000.0, dense, extra=extra)) <= 40
+        assert len(analyze.allocate_map_budget(2000.0, dense, extra=extra)) <= 16
 
 
 def test_extract_map_frames_caps_target_at_40_for_long_video(monkeypatch, tmp_path):
@@ -216,7 +216,7 @@ def test_extract_map_frames_caps_target_at_40_for_long_video(monkeypatch, tmp_pa
         "chapters": [], "heatmap": [], "sponsorblock": [],
         "activity": {"curve": [], "peaks": list(range(5, 2000, 3))},
     }
-    assert len(analyze.allocate_map_budget(duration, dense)) == 40  # 전제조건
+    assert len(analyze.allocate_map_budget(duration, dense)) == 16  # 전제조건
 
     requested_counts = []
 
@@ -232,7 +232,7 @@ def test_extract_map_frames_caps_target_at_40_for_long_video(monkeypatch, tmp_pa
     monkeypatch.setattr(analyze.frames, "dedup_frames", fake_dedup)
 
     kept, dropped = analyze.extract_map_frames(Path("video.mp4"), duration, dense, tmp_path)
-    assert all(c <= 40 for c in requested_counts)   # 어떤 라운드도 40장 초과 요청 안 함
+    assert all(c <= 16 for c in requested_counts)   # 어떤 라운드도 16장 초과 요청 안 함
     assert len(kept) == 5                            # best-so-far — 상한에 막혀 더는 못 늘어남
 
 
@@ -488,3 +488,12 @@ def test_main_timeout_reports_plain_text(monkeypatch, capsys):
     assert code == 4
     assert "=== YTA PASS1: FAILED ===" in out
     assert "Traceback" not in out and "Traceback" not in err
+
+
+def test_map_budget_solo_scale():
+    """solo 모드 예산: 11:27(687s) 영상이 8장, 30분 영상이 16장 캡에 걸린다 (스펙 §4)."""
+    assert len(analyze.allocate_map_budget(687.0, SIG)) <= 8 + 2   # 앵커 2장 여유
+    n_11m = min(16, max(6, round(687.0 / 60 * 0.7)))
+    assert n_11m == 8
+    ts_30m = analyze.allocate_map_budget(1800.0, SIG)
+    assert len(ts_30m) <= 16

@@ -22,8 +22,10 @@ def _in_ranges(t: float, ranges: list) -> bool:
 def allocate_map_budget(duration: float, sig: dict, extra: int = 0) -> list:
     if duration <= 0:
         return []
-    n = min(40, max(12, round(duration / 60 * 1.2)))
-    target = min(40, n + max(0, extra))            # 상한 40은 extra 보강에도 재적용(§3.3 예산 상한)
+    # solo 모드(스펙 2026-08-18 §4): 지도는 확대 판정용 개요다 — 값 판독은 확대가 담당하므로
+    # 밀도를 절반으로 줄인다. 11:27 영상 기준 14 → 8장, 30분 캡 40 → 16장.
+    n = min(16, max(6, round(duration / 60 * 0.7)))
+    target = min(16, n + max(0, extra))            # 상한 16은 extra 보강에도 재적용(§3.3 예산 상한, solo 모드)
     min_gap = max(8.0, duration / n / 2)
     sb = sig.get("sponsorblock", [])
     cands = []                                     # (weight, t)
