@@ -135,8 +135,8 @@ def main() -> int:
             print(f"ERROR: --crop 형식 오류: {args.crop!r} "
                   f"(형식: 파일명@x,y,w,h[,파일명@x,y,w,h...])", file=sys.stderr)
             return 1
-        if len(specs) > 5:
-            print(f"ERROR: --crop 스펙 {len(specs)}건 — 영상당 5회 이내로 제한"
+        if len(specs) > 2:
+            print(f"ERROR: --crop 스펙 {len(specs)}건 — 영상당 2회 이내로 제한"
                   f" (SKILL.md 검증 규칙)", file=sys.stderr)
             return 1
         out_paths = []

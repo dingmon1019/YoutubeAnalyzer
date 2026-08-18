@@ -207,3 +207,20 @@ def test_skill_recommends_sonnet_for_orchestrator():
     """본체는 프레임을 읽지 않고 조율만 하므로 상위 모델이 불필요하다는 안내가 있어야 한다."""
     assert "본체(오케스트레이터) 모델" in TEXT
     assert "sonnet" in TEXT
+
+
+# ── 콜 수 통제 (2026-08-18 실측: 빌더 41콜 $3.26 vs 판독 4콜 $0.47) ──
+
+def test_skill_requires_parallel_frame_reads():
+    """프레임을 순차로 Read하면 콜마다 이전 컨텍스트가 재청구된다 — 병렬 지시가 있어야 한다."""
+    assert "한 번에 병렬로 Read" in TEXT
+
+
+def test_skill_forbids_repeated_edit_on_video_md():
+    """video.md를 Edit으로 여러 번 고치면 콜 수가 늘어난다 — 한 번에 Write 계약."""
+    assert "video.md는 한 번에 Write" in TEXT
+
+
+def test_skill_caps_coverage_audit_frame_reads():
+    """커버리지 감사가 자율적으로 프레임 15장을 열어 $0.58을 썼다 — 상한이 있어야 한다."""
+    assert "프레임은 3장 이내" in TEXT

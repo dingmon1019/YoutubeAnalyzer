@@ -195,15 +195,15 @@ def test_crop_mode_malformed_input_fails_loud(tmp_path, monkeypatch, capsys):
 
 
 def test_crop_mode_caps_at_five_specs(tmp_path, monkeypatch, capsys):
-    """SKILL.md의 '영상당 크롭 ≤5회' 산문 상한을 코드로 배선 — 6건 이상이면 fail-loud."""
+    """SKILL.md의 '영상당 크롭 ≤2회' 산문 상한을 코드로 배선 — 3건 이상이면 fail-loud."""
     cd = tmp_path / "abc12345678"
     (cd / "frames").mkdir(parents=True)
-    specs = ",".join(f"f{i}.jpg@0,0,10,10" for i in range(6))
+    specs = ",".join(f"f{i}.jpg@0,0,10,10" for i in range(3))
     monkeypatch.setattr(zoom.common, "CACHE_ROOT", tmp_path)
     monkeypatch.setattr(zoom.sys, "argv", ["zoom.py", "abc12345678", "--crop", specs])
     assert zoom.main() == 1
     err = capsys.readouterr().err
-    assert "5회" in err
+    assert "2회" in err
 
 
 def test_crop_mode_ffmpeg_failure_fails_loud_and_removes_partial(synth_clip, tmp_path, monkeypatch, capsys):
@@ -244,3 +244,17 @@ def test_crop_with_ranges_prints_note(synth_clip, tmp_path, monkeypatch, capsys)
     assert zoom.main() == 0
     err = capsys.readouterr().err
     assert "NOTE" in err and "--crop" in err
+
+
+def test_crop_spec_cap_is_two(tmp_path, monkeypatch, capsys):
+    """크롭 상한을 5 → 2로 낮춘다 (2026-08-18: 콜 수가 비용의 지배 요인)."""
+    cd = tmp_path
+    (cd / "frames").mkdir()
+    for i in range(3):
+        (cd / "frames" / f"t000{i}_1024.jpg").write_bytes(b"x")
+    spec = ",".join(f"t000{i}_1024.jpg@0,0,10,10" for i in range(3))
+    monkeypatch.setattr(zoom.sys, "argv", ["zoom.py", str(cd), "--crop", spec])
+    code = zoom.main()
+    err = capsys.readouterr().err
+    assert code == 1
+    assert "2회 이내" in err
