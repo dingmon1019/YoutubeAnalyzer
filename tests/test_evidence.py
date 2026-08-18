@@ -858,3 +858,33 @@ def test_audit_candidates_promotes_cross_check_flags():
     }
     got = evidence.audit_candidates(ev, limit=2)
     assert got[0]["id"] == "k2", "교차 대조 flag가 붙은 항목이 command보다 먼저 와야 한다"
+
+
+def test_cross_check_does_not_double_report_pure_digits():
+    """순수 숫자는 numeric 한 번만 — hex 정규식이 숫자도 먹어 같은 쌍이 두 줄로 나오던 결함."""
+    ev = {"visual_evidence": [
+        {"id": "v1", "value": "uploaded 20260818", "timestamp": 1.0},
+        {"id": "v2", "value": "uploaded 20260819", "timestamp": 2.0},
+    ]}
+    flags = evidence.cross_check_values(ev)
+    assert len(flags) == 1
+    assert flags[0]["kind"] == "numeric"
+
+
+def test_cross_check_still_detects_real_hash():
+    """a-f를 포함한 진짜 해시는 계속 hash로 잡힌다 (위 수정의 음성 회귀 가드)."""
+    ev = {"visual_evidence": [
+        {"id": "v1", "value": "commit 3f4a625", "timestamp": 1.0},
+        {"id": "v2", "value": "commit 3f4a0625", "timestamp": 2.0},
+    ]}
+    flags = evidence.cross_check_values(ev)
+    assert len(flags) == 1 and flags[0]["kind"] == "hash"
+
+
+def test_cross_check_skips_items_without_id():
+    """id 없는 항목은 건너뛴다 — audit_candidates가 항상 호출하므로 크래시하면 안 된다."""
+    ev = {"visual_evidence": [
+        {"value": "commit 3f4a625", "timestamp": 1.0},
+        {"id": "v2", "value": "commit 3f4a0625", "timestamp": 2.0},
+    ]}
+    assert evidence.cross_check_values(ev) == []

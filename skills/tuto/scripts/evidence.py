@@ -96,10 +96,16 @@ def cross_check_values(ev: dict) -> list:
     for ve in ev.get("visual_evidence") or []:
         if not isinstance(ve, dict):
             continue
-        val = str(ve.get("value", ""))
         vid = ve.get("id")
+        if not vid:
+            continue  # id 없는 항목은 건너뛴다 — audit_candidates가 항상 호출하므로 크래시하면 안 된다
+        val = str(ve.get("value", ""))
         for kind, rx in (("hash", _TOKEN_HEX), ("numeric", _TOKEN_NUM)):
             for tok in rx.findall(val.lower()):
+                if kind == "hash" and not any(c in "abcdef" for c in tok):
+                    # 순수 숫자는 numeric 버킷 전담 — 커밋 해시로 오분류되면
+                    # CROSSCHECK가 같은 쌍을 두 번 낸다
+                    continue
                 buckets[kind].setdefault(tok, set()).add(vid)
     out = []
     for kind, toks in buckets.items():
