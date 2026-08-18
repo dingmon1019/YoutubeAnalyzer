@@ -78,3 +78,20 @@ class TestSynthesizeContract:
         assert "G\t" in SYNTHESIZE
         assert "산문 노트 금지" in SYNTHESIZE
         assert "초 단위" in SYNTHESIZE
+
+
+class TestSingleWriteContract:
+    # 구 test_single_write_contract 승계: "한 번에 Write" 계약은 TRANSCRIBE·SYNTHESIZE
+    # 양쪽 모두가 지킨다 — 순차 Write는 콜마다 컨텍스트를 재청구한다.
+    def test_transcribe_writes_output_once(self):
+        assert "한 번에 Write" in TRANSCRIBE
+
+    def test_synthesize_writes_output_once(self):
+        assert "한 번에 Write" in SYNTHESIZE
+
+
+class TestParallelReadContract:
+    # 구 test_parallel_read_contract 승계: SYNTHESIZE도 입력 파일 전부를 병렬 Read해야
+    # 한다 — TRANSCRIBE의 병렬 Read는 test_parallel_read_required가 이미 검증한다.
+    def test_synthesize_reads_inputs_in_parallel(self):
+        assert "병렬 Read" in SYNTHESIZE

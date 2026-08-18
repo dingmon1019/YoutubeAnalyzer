@@ -49,28 +49,36 @@ NOTE(yt-dlp 최신성·JS 런타임 부재)는 사용자에게 한 줄 알린다
 `<cache_dir>/zoom-out.txt`로 저장하고 `evidence.py "<cache_dir>" --add-frames ...`까지
 `&&` 한 호출로. 새 프레임도 너는 Read하지 않는다.
 
-**4. 비전② (haiku).** 같은 프롬프트 파일, 모드=확대, 프레임=zoom-out.txt의 경로들,
-출력=`<cache_dir>/vision-zoom.lines`.
+**4. 비전② (haiku).** 같은 프롬프트 파일, 모드=확대. 프레임 목록 대신
+`<cache_dir>/zoom-out.txt` 경로를 준다. 출력=`<cache_dir>/vision-zoom.lines`.
 
 **5. 합성 (Agent, `model: "sonnet"`).** "`<PROMPTS>/synthesize.md`를 Read하고 수행.
 입력: pass1-report.txt, vision-map.lines, vision-zoom.lines. 출력:
-<cache_dir>/patch.lines". V 전부 복사 + K/C/G — 단일 배치가 계약이다.
+<cache_dir>/patch.lines". V 전부 복사 + K/C/G — 단일 배치가 계약이다. 최종 응답
+`T=<영상유형>, K n건, C n건, V 복사 m건, ⚠️ k건`에서 9단계 보고용 수치를 얻는다.
 
 **6. 병합 + 교차 대조.**
 `evidence.py "<cache_dir>" --from-lines "<cache_dir>/patch.lines" --cross-check` 한 호출 —
 기존 `--merge` 스키마 검증 게이트를 그대로 통과해야 한다. exit 2면 stderr의 INVALID 줄을
 합성 에이전트에 그대로 재전달해 1회 수정시킨다(파일 수정도 에이전트가 한다). CROSSCHECK
-flag가 나오면 **비전 재확인(haiku)**: transcribe.md 재확인 모드로 해당 프레임·값 후보만
-주고 `<cache_dir>/recheck.lines`에 정정 V라인을 받아 `--from-lines`로 반영한다. flag 수를
-기억한다 — 8단계 `--cross-flags`에 넣는다(정정 반영 여부와 무관하게 발견 건수를 기록한다).
+출력은 v-id·kind·값쌍뿐 프레임명이 없다 — flag가 나오면 **비전 재확인(haiku)**:
+transcribe.md 재확인 모드로 `<cache_dir>/evidence.json` 경로와 flag의 v-id·값 후보를
+주고(프레임명은 에이전트가 evidence.json에서 직접 찾는다) `<cache_dir>/recheck.lines`에
+정정 V라인을 받아 `--from-lines`로 반영한다. flag 수를 기억한다 — 8단계 `--cross-flags`에
+넣는다(정정 반영 여부와 무관하게 발견 건수를 기록한다). **한계**: 정정은 V 추가 등재일
+뿐 기존 K/C의 오독 값은 그대로 남는다 — 갈린 값은 video.md에 flag 건수로만 드러나며
+정본 판정은 정정 V가 담당한다.
 
 **7. 커버리지 감사 (haiku).**
 `evidence.py "<cache_dir>" --coverage-input > "<cache_dir>/coverage-digest.txt"` 후
 디스패치: "이미지 Read 금지. <digest 경로>와 <pass1-report.txt 경로>를 Read하고, 이
 영상을 안 본 에이전트가 작업하려면 알아야 하는데 digest에 없는 지식을 자막으로 검증해
-**명백한 것만** `K	type	초단위시각	t#refs	content` 형식으로
+**명백한 것만** `K	type	초단위시각	t#refs	content` 형식으로(t#는 pass1-report의
+`== TRANSCRIPT ==` 아래 `[MM:SS]` 줄을 0부터 센 순번 — 숫자만 쓴다)
 `<cache_dir>/coverage.lines`에 Write. 없으면 파일을 만들지 마라. 최종 응답: '보강 n건'".
-n>0이면 `--from-lines coverage.lines`로 반영한다(1회 한정). n을 기억한다 —
+n>0이면 `--from-lines coverage.lines`로 반영한다(1회 한정) — exit 2면 stderr의 INVALID를
+같은 haiku에 1회만 재전달해 고치게 하고, 그래도 실패하면 `--coverage-added 0`으로 렌더하며
+사용자 보고에 실패를 명시한다(**머지에 성공한 건수만 n이다**). n을 기억한다 —
 `--coverage-added`에 넣는다. 자막 없는 영상은 이 단계를 생략하고 8단계에서
 `--note "커버리지 감사 생략 — 자막 없음"`.
 
@@ -79,8 +87,8 @@ n>0이면 `--from-lines coverage.lines`로 반영한다(1회 한정). n을 기�
 문서는 evidence.json의 결정론적 렌더링이며 "표본 감사 미실시" 명시를 포함한다. 네가
 문서를 쓰거나 고치지 마라 — 고칠 것이 있으면 evidence를 고치고 다시 render한다.
 
-**9. 응답.** 요약(영상유형·핵심 지식 수·⚠️ 건수 — 에이전트 최종 응답의 집계만 쓴다) +
-두 산출물 경로. 자연어 요청이 있었으면 **곧바로 이어서 수행한다.**
+**9. 응답.** 요약(영상유형·핵심 지식 수·⚠️ 건수 — 5단계 합성 에이전트 최종 응답의
+T·K·C·⚠️ 값만 쓴다) + 두 산출물 경로. 자연어 요청이 있었으면 **곧바로 이어서 수행한다.**
 
 ## 콜 수 규율 — 비용의 지배 요인
 
