@@ -199,3 +199,11 @@ def test_skill_defines_gaps_as_time_ranges_not_notes():
     '누락 후보'로 가야 한다는 명시 문구가 있어야 한다."""
     assert "시간 구간 객체만" in TEXT
     assert "누락 후보" in TEXT
+
+
+# ── 본체 모델 티어 (2026-08-18 실측: 본체 opus가 전체 비용의 56%, $7.20) ──
+
+def test_skill_recommends_sonnet_for_orchestrator():
+    """본체는 프레임을 읽지 않고 조율만 하므로 상위 모델이 불필요하다는 안내가 있어야 한다."""
+    assert "본체(오케스트레이터) 모델" in TEXT
+    assert "sonnet" in TEXT
