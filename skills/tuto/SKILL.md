@@ -74,7 +74,8 @@ transcribe.md 재확인 모드로 `<cache_dir>/evidence.json` 경로와 flag의 
 디스패치: "이미지 Read 금지. <digest 경로>와 <pass1-report.txt 경로>를 Read하고, 이
 영상을 안 본 에이전트가 작업하려면 알아야 하는데 digest에 없는 지식을 자막으로 검증해
 **명백한 것만** `K	type	초단위시각	t#refs	content` 형식으로(t#는 pass1-report의
-`== TRANSCRIPT ==` 아래 `[MM:SS]` 줄을 0부터 센 순번 — 숫자만 쓴다)
+`== TRANSCRIPT ==` 아래 `[MM:SS]` 줄을 0부터 센 순번. 예:
+`K	command	88.0	t12;t13	pip install -U yt-dlp` — refs는 `t` 접두사 필수, 복수는 `;` 구분)
 `<cache_dir>/coverage.lines`에 Write. 없으면 파일을 만들지 마라. 최종 응답: '보강 n건'".
 n>0이면 `--from-lines coverage.lines`로 반영한다(1회 한정) — exit 2면 stderr의 INVALID를
 같은 haiku에 1회만 재전달해 고치게 하고, 그래도 실패하면 `--coverage-added 0`으로 렌더하며
