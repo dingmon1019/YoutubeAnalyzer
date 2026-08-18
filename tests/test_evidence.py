@@ -1093,3 +1093,13 @@ def test_expand_lines_multi_v_sequential_ids_with_nonempty_base(tmp_path):
     assert ids == ["v1", "v2", "v3"] and len(set(ids)) == 3
     assert merged["knowledge_items"][0]["evidence"][0]["ref"] == "v2"
     assert evidence.validate(merged) == [] or not any("중복" in e for e in evidence.validate(merged))
+
+
+def test_render_includes_transcript_source():
+    """렌더 문서에 자막 출처가 있어야 자막 전용 주장의 신뢰 수준을 판단할 수 있다."""
+    ev = {"video": {"title": "t", "duration": 10.0}, "video_type": {},
+          "provenance": {"transcript": {"source": "captions", "lang": "ko"}},
+          "visual_evidence": [], "claims": [], "knowledge_items": [], "gaps": [], "flags": []}
+    md = evidence.render_video_md(ev, note="커버리지 감사 생략 — 자막 없음")
+    assert "자막 출처" in md and "captions" in md
+    assert "커버리지 감사 생략" in md

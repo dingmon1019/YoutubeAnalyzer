@@ -774,17 +774,29 @@ def _item_line(item: dict, text_key: str) -> str:
     return line
 
 
-def render_video_md(ev: dict, cross_flags: int = 0, coverage_added: int = 0) -> str:
+def _transcript_source(ev: dict) -> str:
+    tr = (ev.get("provenance") or {}).get("transcript") or {}
+    src = tr.get("source")
+    if not src:
+        return "정보 없음"
+    return f"{src}({tr.get('lang', '?')})"
+
+
+def render_video_md(ev: dict, cross_flags: int = 0, coverage_added: int = 0, note: str = "") -> str:
     v = ev.get("video") or {}
     vt = ev.get("video_type") or {}
+    verify_line = (f"- **검증**: 교차 대조 flag {cross_flags}건 · 커버리지 보강 {coverage_added}건 · "
+        "**표본 감사 미실시 — 근거는 프레임·자막으로 추적 가능하나 독립 검증되지 않음**")
+    if note:
+        verify_line += f" · {note}"
     lines = [
         f"# {v.get('title', '(제목 없음)')}",
         "",
         f"- **URL**: {v.get('url', '')}",
         f"- **길이**: {common.fmt_ts(_safe_ts(v.get('duration')))} · **채널**: {v.get('channel', '')}",
+        f"- **자막 출처**: {_transcript_source(ev)}",
         f"- **영상 유형**: {vt.get('primary', '?')} ({vt.get('confidence', '?')}) — {vt.get('basis', '')}",
-        f"- **검증**: 교차 대조 flag {cross_flags}건 · 커버리지 보강 {coverage_added}건 · "
-        "**표본 감사 미실시 — 근거는 프레임·자막으로 추적 가능하나 독립 검증되지 않음**",
+        verify_line,
         "",
         "## 핵심 지식",
         "",
@@ -854,6 +866,8 @@ def main() -> int:
                     help="evidence.json에서 video.md를 결정론적으로 생성")
     ap.add_argument("--cross-flags", dest="cross_flags", type=int, default=0)
     ap.add_argument("--coverage-added", dest="coverage_added", type=int, default=0)
+    ap.add_argument("--note", default="",
+                    help="검증 줄 끝에 덧붙일 자유 텍스트(예: 커버리지 감사 생략 사유)")
     ap.add_argument("--summary", action="store_true")
     args = ap.parse_args()
 
@@ -902,7 +916,7 @@ def main() -> int:
         if not flags:
             print("CROSSCHECK none")
     if args.render:
-        md = render_video_md(ev, args.cross_flags, args.coverage_added)
+        md = render_video_md(ev, args.cross_flags, args.coverage_added, args.note)
         out = Path(cd) / "video.md"
         out.write_text(md, encoding="utf-8", newline="\n")
         print(f"RENDERED {out}")

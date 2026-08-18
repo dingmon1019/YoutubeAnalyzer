@@ -2,7 +2,7 @@
 name: tuto
 description: AI가 사용자 대신 유튜브 영상을 보고, 자막과 화면(슬라이드·UI·표·차트·설정값·코드)을 함께 판독해 근거 추적되는 지식으로 만든다. 모든 값은 프레임·타임스탬프로 추적 가능하고 해시·수치는 교차 대조, 누락은 커버리지 감사로 검출한다. 산출물은 evidence.json(기계용)과 video.md(사람용)다. "영상 분석해줘", "이 영상 설명해줘", "영상에서 알려주는 방법을 우리 프로젝트에 적용해줘", "화면에 나온 설정값·명령어 정리", "이 튜토리얼 따라해줘", "영상 핵심 주장과 근거", "영상 내용 질문할게" 요청 시 사용. 영상 링크 단순 공유나 추천 요청에는 쓰지 않는다.
 argument-hint: "<video-url> [자연어 요청]"
-allowed-tools: Bash, Read, Write, Edit, AskUserQuestion, Agent
+allowed-tools: Bash, Read, Write, AskUserQuestion, Agent
 user-invocable: true
 ---
 
@@ -63,12 +63,12 @@ G	350.0	469.0	지도 공백
 
 `V`의 id는 등장 순서대로 v1..vN이 **자동 부여**된다 — 너는 id를 쓰지 않는다. `K`/`C`의
 근거 필드는 `;` 구분 로컬 참조만 쓴다(`v#`=frame, `t#`=transcript, 예: `v1;t12`). `C`의
-5번째 필드(conflict, 선택)는 `conflict=자막값=>화면값` 형식. 값 내부의 탭은 작성 시
-스페이스로 치환한다.
+5번째 필드(conflict, 선택)는 `conflict=자막값=>화면값` 형식. 값 안의 탭·개행은 스페이스로
+치환한다.
 
 규칙 — 어길 시 merge가 거부한다:
 - 화면에서 또렷이 읽히지 않는 값은 쓰지 않는다. 불확실하면 `⚠️ 화면 확인 필요 (t=MM:SS)`. 추측 금지.
-- 자막값 ≠ 화면값이면 **화면을 우선**하고 conflict 필드에 둘 다 적는다(자막=>화면 순).
+- 자막값 ≠ 화면값이면 **화면을 우선**하고 conflict 필드에 둘 다 적는다.
 - `K`의 마지막 필드(content)는 행동 가능한 수준으로("Add Python to PATH를 체크한다").
   type: concept·procedure·action·command·setting·prerequisite·result·criterion·warning·example·comparison. 영상에 있는 것만.
 - `t#` ref는 pass1 보고서 자막 인덱스(0부터).
@@ -76,15 +76,21 @@ G	350.0	469.0	지도 공백
 - `verification.status`는 확장 시 자동으로 `unaudited`가 붙는다 — 네가 쓰지 않는다.
 
 **5. 교차 대조.** `evidence.py "<cache_dir>" --cross-check` — 해시·수치 판독이 갈린
-자리를 비용 0으로 찾는다. CROSSCHECK가 나오면 해당 프레임만 다시 보고 값을 확정해 merge로 정정한다.
+자리를 비용 0으로 찾는다. CROSSCHECK가 나오면 해당 프레임만 다시 보고, 보정 라인을
+`patch.lines`에 써서 `--from-lines`로 정정한다. 보정 라인의 `v#`는 이번 배치에서 새로
+쓰는 V만 가리킨다 — 기존 프레임을 근거로 쓰려면 `t#` 자막 참조를 쓰거나 해당 화면을 새
+V로 다시 등재한다. CROSSCHECK 줄 수(발견 건수)를 기억해 둔다 — 7단계 `--cross-flags`에
+넣는다(정정을 반영했어도 발견 건수를 기록한다 — 판독 오류가 있었다는 사실 자체가 기록
+가치다).
 
 **6. 커버리지 감사 (유일한 서브에이전트, `model: "haiku"`).**
 `evidence.py "<cache_dir>" --coverage-input` 출력 + `pass1-report.txt` 경로를 주고
 "이 영상을 안 본 에이전트가 작업하려면 알아야 하는데 digest에 없는 지식"을 묻는다.
 **프롬프트에 이미지 Read 금지를 명시한다** — 자막·digest 텍스트만으로 판단시킨다.
-반환된 누락 후보는 자막으로 재확인해 **명백한 것만** merge로 보강한다(1회 한정).
-자막이 없는 영상(STATUS flags의 no transcript)은 이 단계를 생략하고 검증 스탬프에 명시한다
-— 체크리스트의 원천이 없다.
+반환된 누락 후보는 자막으로 재확인해 **명백한 것만** `--from-lines`로 보강한다(1회 한정).
+보강한 항목 수를 기억해 둔다 — 7단계 `--coverage-added`에 넣는다.
+자막이 없는 영상(STATUS flags의 no transcript)은 이 단계를 생략하고
+`--render --note "커버리지 감사 생략 — 자막 없음"`으로 명시한다 — 체크리스트의 원천이 없다.
 
 **7. video.md — 코드가 생성한다.**
 `evidence.py "<cache_dir>" --render --cross-flags <5단계 flag 수> --coverage-added <6단계 보강 수>`
@@ -97,15 +103,19 @@ G	350.0	469.0	지도 공백
 ## 콜 수 규율 — 비용의 지배 요인
 
 `cache_read`는 콜마다 이전 컨텍스트 전체를 재청구한다(실측: 순차 Read 41콜 $3.26 vs
-병렬 4콜 $0.47). **프레임은 한 응답에서 병렬 Read, 문서는 한 번에 Write, 독립된 셸 명령은 `&&`로 연쇄해
-한 콜로 묶는다(예: zoom 추출과 --add-frames, --from-lines와 --cross-check, --coverage-input과
---render). 전체 20콜 이내를 목표로 하되, 초과했더라도 남은 단계를 생략하지 말고 완주한다 —
-콜 절약보다 산출물 완결이 우선이다.**
+병렬 4콜 $0.47). **프레임은 한 응답에서 병렬 Read, 문서는 한 번에 Write.** 독립된 셸
+명령은 `&&`로 연쇄하고, 같은 스크립트의 플래그는 한 호출에 결합한다(예: zoom 추출과
+`--add-frames`는 `&&`로, `--from-lines`와 `--cross-check`는
+`evidence.py "<cache_dir>" --from-lines patch.lines --cross-check` 한 호출로 —
+`--from-lines`가 저장한 결과에 이어서 교차 대조가 돈다). **`--coverage-input`과
+`--render`는 절대 한 호출에 묶지 마라** — 사이에 커버리지 감사와 보강이 있고, 같은
+호출에서는 `--render`가 먼저 실행된다. 전체 20콜 이내를 목표로 하되, 초과했더라도 남은
+단계를 생략하지 말고 완주한다 — 콜 절약보다 산출물 완결이 우선이다.
 
 ## 후속 질문
 
 이미 분석된 영상은 `<cache_dir>/evidence.json`으로 먼저 답한다. **analyze.py 재실행은 금지.**
-근거가 부족할 때만 `zoom.py --timestamps`로 보충하고 merge로 반영한다.
+근거가 부족할 때만 `zoom.py --timestamps`로 보충하고 `--from-lines`로 반영한다.
 `video.mp4 evicted` 오류면 재분석이 필요함을 알린다.
 
 ## 실행형 요청 시

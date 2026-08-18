@@ -91,3 +91,13 @@ def test_render_and_lines_wired():
     assert "--render" in TEXT
     assert "--from-lines" in TEXT
     assert "evidence-patch.json" not in TEXT
+
+
+def test_no_bare_merge_instructions():
+    """리뷰 회귀 가드: 맨 'merge로 ...한다' 지시가 남으면 LLM이 구 JSON 경로로 회귀한다."""
+    for phrase in ("merge로 정정", "merge로 보강", "merge로 반영"):
+        assert phrase not in TEXT, phrase
+
+
+def test_render_note_wired():
+    assert "--note" in TEXT
