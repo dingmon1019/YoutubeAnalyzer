@@ -806,3 +806,55 @@ def test_cli_coverage_input_rejects_bad_observation(tmp_path):
     p = _run([str(tmp_path), "--coverage-input", str(f)])
     assert p.returncode == 2
     assert "nope" in p.stderr
+
+
+def test_cross_check_detects_hash_misread():
+    """실측 사례: 같은 커밋 해시가 3f4a625와 3f4a0625로 갈렸다 — 편집거리 1 유사쌍을 잡는다."""
+    ev = {"visual_evidence": [
+        {"id": "v1", "value": "3f4a625 Examples for 4.4", "timestamp": 1.0},
+        {"id": "v2", "value": "pick 3f4a0625 Examples for 4.4", "timestamp": 2.0},
+    ]}
+    flags = evidence.cross_check_values(ev)
+    assert len(flags) == 1
+    assert set(flags[0]["values"]) == {"3f4a625", "3f4a0625"}
+    assert set(flags[0]["ids"]) == {"v1", "v2"}
+
+
+def test_cross_check_ignores_identical_and_unrelated():
+    """같은 값의 반복은 정상이고, 전혀 다른 값끼리는 묶지 않는다 (오탐 방지)."""
+    ev = {"visual_evidence": [
+        {"id": "v1", "value": "50d1d83 base", "timestamp": 1.0},
+        {"id": "v2", "value": "50d1d83 base again", "timestamp": 2.0},
+        {"id": "v3", "value": "abcdef1 other", "timestamp": 3.0},
+    ]}
+    assert evidence.cross_check_values(ev) == []
+
+
+def test_cross_check_detects_numeric_misread():
+    """수치도 같은 규칙으로 잡는다 — 84K vs 83K 류."""
+    ev = {"visual_evidence": [
+        {"id": "v1", "value": "views 90991", "timestamp": 1.0},
+        {"id": "v2", "value": "total 90091", "timestamp": 2.0},
+    ]}
+    flags = evidence.cross_check_values(ev)
+    assert len(flags) == 1
+    assert flags[0]["kind"] == "numeric"
+
+
+def test_audit_candidates_promotes_cross_check_flags():
+    """교차 대조에 걸린 항목은 표본 감사 최상위로 올라간다 — 표본 선정 개선이 목적이다."""
+    ev = {
+        "visual_evidence": [
+            {"id": "v1", "value": "3f4a625 x", "timestamp": 1.0},
+            {"id": "v2", "value": "3f4a0625 x", "timestamp": 2.0},
+        ],
+        "claims": [],
+        "knowledge_items": [
+            {"id": "k1", "type": "command", "content": "git rebase -i", "timestamp": 5.0,
+             "evidence": [{"source": "frame", "ref": "v9"}]},
+            {"id": "k2", "type": "example", "content": "해시 예시", "timestamp": 2.0,
+             "evidence": [{"source": "frame", "ref": "v2"}]},
+        ],
+    }
+    got = evidence.audit_candidates(ev, limit=2)
+    assert got[0]["id"] == "k2", "교차 대조 flag가 붙은 항목이 command보다 먼저 와야 한다"

@@ -18,6 +18,7 @@
 """
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -54,6 +55,61 @@ AUDIT_PRIORITY = ("command", "setting", "action", "criterion", "prerequisite",
 # 재사용해 커버리지 대조가 `kind ↔ knowledge type`으로 직접 이어지게 한다.
 # `numeric`은 "수치가 화면에 보인다"는 신호, `other`는 분류 애매한 경우.
 OBSERVATION_KINDS = KNOWLEDGE_TYPES + ("numeric", "other")
+
+# 결정론적 교차 대조 — LLM 없이 "같은 값의 판독이 갈린" 자리를 찾는다.
+# 실측(2026-08-18): 표본 감사 6건이 4편 연속 수정 0건을 낸 반면, 실제 오류 2건
+# (3f4a625를 3f4a0625로 오독)은 표본 밖에 있었다. 이 유형은 같은 값이 여러 프레임에
+# 반복 등장한다는 성질을 이용하면 비용 0으로 잡힌다.
+_TOKEN_HEX = re.compile(r"\b[0-9a-f]{6,10}\b")
+_TOKEN_NUM = re.compile(r"\b\d{3,}\b")
+
+
+def _near_miss(a: str, b: str) -> bool:
+    """편집거리 1 이내인가 (같은 문자열은 제외). 치환 1회 또는 삽입·삭제 1회."""
+    if a == b:
+        return False
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1:
+        return False
+    if la == lb:
+        return sum(x != y for x, y in zip(a, b)) == 1
+    short, long = (a, b) if la < lb else (b, a)
+    i = j = skipped = 0
+    while i < len(short) and j < len(long):
+        if short[i] == long[j]:
+            i += 1
+            j += 1
+        elif skipped:
+            return False
+        else:
+            skipped = 1
+            j += 1
+    return True
+
+
+def cross_check_values(ev: dict) -> list:
+    """visual_evidence의 값에서 해시·수치 토큰을 뽑아 판독이 갈린 쌍을 찾는다.
+
+    반환: [{"values": [a, b], "ids": [id_a, id_b], "kind": "hash"|"numeric"}]
+    같은 토큰의 반복은 정상이므로 제외하고, 편집거리 1인 쌍만 남긴다."""
+    buckets = {"hash": {}, "numeric": {}}
+    for ve in ev.get("visual_evidence") or []:
+        if not isinstance(ve, dict):
+            continue
+        val = str(ve.get("value", ""))
+        vid = ve.get("id")
+        for kind, rx in (("hash", _TOKEN_HEX), ("numeric", _TOKEN_NUM)):
+            for tok in rx.findall(val.lower()):
+                buckets[kind].setdefault(tok, set()).add(vid)
+    out = []
+    for kind, toks in buckets.items():
+        keys = sorted(toks)
+        for i, a in enumerate(keys):
+            for b in keys[i + 1:]:
+                if _near_miss(a, b):
+                    out.append({"values": [a, b], "kind": kind,
+                                "ids": sorted(toks[a] | toks[b])})
+    return out
 
 
 def evidence_path(cache_dir) -> Path:
@@ -453,7 +509,15 @@ def audit_candidates(ev: dict, limit: int = 6) -> list:
         pool.append({"kind": "claim", "id": c.get("id"), "type": "claim",
                      "content": c.get("claim", ""), "timestamp": c.get("timestamp"),
                      "evidence": c.get("evidence") or []})
-    pool.sort(key=lambda x: (rank.get(x["type"], len(rank)), str(x["id"])))
+    # 교차 대조에 걸린 근거를 쓰는 항목은 표본 최상위로 — 표본 감사가 놓친 실제 오류
+    # 유형이 정확히 이것이었다(2026-08-18).
+    flagged = set()
+    for f in cross_check_values(ev):
+        flagged.update(f["ids"])
+    def _flag_rank(x):
+        return 0 if any(e.get("ref") in flagged for e in x["evidence"]
+                        if isinstance(e, dict) and e.get("source") == "frame") else 1
+    pool.sort(key=lambda x: (_flag_rank(x), rank.get(x["type"], len(rank)), str(x["id"])))
     return pool[:limit]
 
 
@@ -601,6 +665,8 @@ def main() -> int:
                     "(digest + 시각 관측 + 사전 필터). 경로 생략 시 캐시의 visual-coverage.json")
     ap.add_argument("--digest", action="store_true",
                     help="커버리지 감사용 지식 목록 출력 (claims + knowledge_items)")
+    ap.add_argument("--cross-check", dest="cross_check", action="store_true",
+                    help="해시·수치 판독이 갈린 자리 검출 (LLM 없이, 감사 후보 선정용)")
     ap.add_argument("--summary", action="store_true")
     args = ap.parse_args()
 
@@ -634,6 +700,12 @@ def main() -> int:
         ev = candidate
         save(cd, ev)
 
+    if args.cross_check:
+        flags = cross_check_values(ev)
+        for f in flags:
+            print(f"CROSSCHECK {f['kind']}\t{' vs '.join(f['values'])}\t{','.join(f['ids'])}")
+        if not flags:
+            print("CROSSCHECK none")
     if args.summary:
         print(summary_line(ev))
     if args.digest:
