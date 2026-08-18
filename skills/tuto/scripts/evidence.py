@@ -429,14 +429,17 @@ def _next_id(items: list, prefix: str) -> str:
 # ── 컴팩트 patch 라인 확장기 — LLM이 JSON 보일러플레이트(따옴표·중괄호·필드명)를
 # 출력하던 토큰을 30~40% 줄인다. 확장 결과는 기존 merge/validate 게이트를 그대로 탄다.
 
-def _parse_refs(spec: str) -> list:
+def _parse_refs(spec: str, id_offset: int = 0) -> list:
     out = []
     for tok in (spec or "").split(";"):
         tok = tok.strip()
         if not tok:
             continue
         if tok.startswith("v"):
-            out.append({"source": "frame", "ref": tok})
+            n = tok[1:]
+            if not n.isdigit():
+                raise ValueError(f"알 수 없는 근거 참조: {tok!r} (v#=frame, t#=transcript)")
+            out.append({"source": "frame", "ref": f"v{id_offset + int(n)}"})
         elif tok.startswith("t"):
             out.append({"source": "transcript", "ref": tok[1:]})
         else:
@@ -444,9 +447,15 @@ def _parse_refs(spec: str) -> list:
     return out
 
 
-def expand_lines(text: str) -> dict:
+def expand_lines(text: str, id_offset: int = 0) -> dict:
     """TAB 구분 라인(T/V/K/C/G)을 evidence patch dict로 확장한다. 형식 위반은
-    ValueError로 fail-loud — 조용히 건너뛰면 지식이 소리 없이 유실된다."""
+    ValueError로 fail-loud — 조용히 건너뛰면 지식이 소리 없이 유실된다. 값 내부의
+    탭은 작성 시 스페이스로 치환한다.
+
+    id_offset: 이미 존재하는 visual_evidence 개수. --from-lines가 재호출되면(교차대조
+    정정·커버리지 보강) V의 id를 v{id_offset+1}..부터 부여해 기존 v-id와 충돌하지
+    않게 하고, 같은 배치의 K/C가 쓰는 로컬 v# 참조도 같은 오프셋으로 재매핑한다
+    (LLM은 항상 로컬 v1..vN으로 쓴다)."""
     patch = {"visual_evidence": [], "claims": [], "knowledge_items": [], "gaps": []}
     vn = 0
     for ln, raw in enumerate(text.splitlines(), 1):
@@ -460,14 +469,14 @@ def expand_lines(text: str) -> dict:
             elif kind == "V":
                 vn += 1
                 patch["visual_evidence"].append({
-                    "id": f"v{vn}", "type": f[1], "timestamp": float(f[2]),
+                    "id": f"v{id_offset + vn}", "type": f[1], "timestamp": float(f[2]),
                     "frame": f[3], "confidence": f[4], "value": f[5]})
             elif kind == "K":
                 patch["knowledge_items"].append({
                     "type": f[1], "timestamp": float(f[2]),
-                    "evidence": _parse_refs(f[3]), "content": f[4]})
+                    "evidence": _parse_refs(f[3], id_offset), "content": f[4]})
             elif kind == "C":
-                c = {"timestamp": float(f[1]), "evidence": _parse_refs(f[2]),
+                c = {"timestamp": float(f[1]), "evidence": _parse_refs(f[2], id_offset),
                      "claim": f[3], "verification": {"status": "unaudited"}}
                 if len(f) > 4 and f[4].startswith("conflict="):
                     a, _, b = f[4][len("conflict="):].partition("=>")
@@ -478,8 +487,8 @@ def expand_lines(text: str) -> dict:
             else:
                 raise ValueError(f"알 수 없는 레코드 종류: {kind!r}")
         except (IndexError, ValueError) as e:
-            if isinstance(e, ValueError) and ("레코드" in str(e) or "근거 참조" in str(e)):
-                raise
+            # 모든 예외를 행 번호로 수렴시킨다 — 특수 케이스 재-raise는 행 번호를
+            # 잃어 "INVALID 보고 1회 수정" 왕복을 깬다. 원본 메시지는 `— {e}`에 남는다.
             raise ValueError(f"{ln}행 형식 오류 ({kind}): {raw[:80]!r} — {e}") from e
     return patch
 
@@ -683,6 +692,20 @@ def validate(ev: dict) -> list:
             errs.append(f"visual_evidence[{vid}].frame: {frame!r} not in provenance.frames "
                         f"— 실재하지 않는 프레임을 근거로 쓸 수 없다")
 
+    # 중복 id 심층 방어 — expand_lines의 id_offset이 잘못되거나(호출부 버그) 두 소스가
+    # 겹쳐 써도 여기서 잡는다. merge()의 setdefault는 id가 이미 있으면 그냥 통과시키므로
+    # 이 검사가 마지막 방어선이다.
+    _seen_ve_ids, _dupe_ve_ids = [], []
+    for v in ev.get("visual_evidence") or []:
+        if not isinstance(v, dict):
+            continue
+        vid = v.get("id")
+        if vid in _seen_ve_ids and vid not in _dupe_ve_ids:
+            _dupe_ve_ids.append(vid)
+        _seen_ve_ids.append(vid)
+    for vid in _dupe_ve_ids:
+        errs.append(f"visual_evidence: 중복 id {vid!r}")
+
     for c in ev.get("claims") or []:
         if not isinstance(c, dict):
             continue
@@ -812,7 +835,8 @@ def main() -> int:
     ap.add_argument("cache_dir")
     ap.add_argument("--merge", help="병합할 patch json 경로")
     ap.add_argument("--from-lines", dest="from_lines",
-                    help="컴팩트 TSV 라인 파일을 patch로 확장해 병합 (T/V/K/C/G)")
+                    help="컴팩트 TSV 라인 파일을 patch로 확장해 병합 (T/V/K/C/G). "
+                    "값 내부의 탭은 작성 시 스페이스로 치환한다")
     ap.add_argument("--verdicts", help="감사 판정 json 경로 (claim_id/status/auditor/note 배열)")
     ap.add_argument("--add-frames", dest="add_frames",
                     help="확대 프레임 등록 — zoom.py 출력을 담은 파일 경로 (FRAME 줄 파싱)")
@@ -852,7 +876,8 @@ def main() -> int:
         if args.from_lines:
             try:
                 candidate = merge(candidate, expand_lines(
-                    Path(args.from_lines).read_text(encoding="utf-8")))
+                    Path(args.from_lines).read_text(encoding="utf-8"),
+                    id_offset=len(candidate.get("visual_evidence") or [])))
             except ValueError as e:
                 print(f"INVALID: {e}", file=sys.stderr)
                 return 2

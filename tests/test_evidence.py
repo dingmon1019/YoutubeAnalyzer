@@ -1047,3 +1047,49 @@ def test_expand_lines_merge_equivalence(tmp_path):
     merged_b = evidence.merge(_json.loads(_json.dumps(base)), json_patch)
     for key in ("visual_evidence", "claims", "knowledge_items", "gaps"):
         assert merged_a[key] == merged_b[key], key
+
+
+def test_expand_lines_offsets_ids_on_reinvocation():
+    """재호출 시 기존 v-id와 충돌하면 안 된다 — refs도 함께 재매핑된다."""
+    lines = "V\tui\t10.0\tf.jpg\thigh\t값A\nK\tcommand\t10.0\tv1\t명령"
+    p = evidence.expand_lines(lines, id_offset=3)
+    assert p["visual_evidence"][0]["id"] == "v4"
+    assert p["knowledge_items"][0]["evidence"] == [{"source": "frame", "ref": "v4"}]
+
+
+def test_validate_rejects_duplicate_visual_ids():
+    ev = {"schema_version": "0.3", "video": {}, "video_type": {},
+          "provenance": {"frames": {"map": [], "zoom": []}, "transcript": {}},
+          "segments": [], "claims": [], "knowledge_items": [], "gaps": [], "flags": [],
+          "visual_evidence": [
+              {"id": "v1", "value": "a", "timestamp": 1.0},
+              {"id": "v1", "value": "b", "timestamp": 2.0}]}
+    errs = evidence.validate(ev)
+    assert any("중복" in e for e in errs)
+
+
+def test_expand_lines_unknown_record_includes_line_number():
+    """행 번호 없는 에러는 'INVALID 보고 1회 수정' 왕복을 성립시키지 못한다."""
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match=r"2행"):
+        evidence.expand_lines("V\tui\t1.0\tf.jpg\thigh\tok\nX\t뭔가")
+
+
+def test_expand_lines_multi_v_sequential_ids_with_nonempty_base(tmp_path):
+    """다건 V 순차 부여 + 비어 있지 않은 base 병합 — Critical 1이 터지던 정확한 지점."""
+    import json as _json
+    base = {"schema_version": "0.3", "video": {"id": "x", "duration": 10.0}, "video_type": {},
+            "provenance": {"frames": {"map": [{"file": "f.jpg", "t": 1.0}], "zoom": []},
+                           "transcript": {}},
+            "segments": [{"start": 0.0, "text": "s"}],
+            "visual_evidence": [{"id": "v1", "value": "기존", "timestamp": 1.0, "frame": "f.jpg"}],
+            "claims": [], "knowledge_items": [], "gaps": [], "flags": []}
+    lines = ("V\tui\t2.0\tf.jpg\thigh\t새값1\n"
+             "V\tui\t3.0\tf.jpg\thigh\t새값2\n"
+             "K\tcommand\t2.0\tv1;v2\t두 프레임 참조 명령")
+    p = evidence.expand_lines(lines, id_offset=1)
+    merged = evidence.merge(_json.loads(_json.dumps(base)), p)
+    ids = [v["id"] for v in merged["visual_evidence"]]
+    assert ids == ["v1", "v2", "v3"] and len(set(ids)) == 3
+    assert merged["knowledge_items"][0]["evidence"][0]["ref"] == "v2"
+    assert evidence.validate(merged) == [] or not any("중복" in e for e in evidence.validate(merged))
