@@ -71,3 +71,10 @@ class TestSynthesizeContract:
 
     def test_length_cap(self):
         assert len(SYNTHESIZE) < 3500
+
+    def test_gap_record_is_time_range_only(self):
+        # G 레코드는 시간 구간(초 단위 시작·끝)만 — 산문 노트는 스키마가 거부한다
+        # (구 test_gaps_are_time_ranges 계약 승계: SKILL.md에서 이동 후 누락되었던 것을 보강)
+        assert "G\t" in SYNTHESIZE
+        assert "산문 노트 금지" in SYNTHESIZE
+        assert "초 단위" in SYNTHESIZE
