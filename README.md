@@ -11,9 +11,9 @@ Turn YouTube videos into **verified working knowledge** for AI agents — transc
 AI가 대신 영상을 보고, 자막과 화면을 함께 이해하고, 검증된 지식으로 변환합니다.
 이후 AI는 그 내용을 설명하거나 질문에 답하고, 현재 작업과 비교하거나 튜토리얼을 따라 할 수 있습니다.
 
-[![Version](https://img.shields.io/badge/version-0.3.3-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-239%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-266%20passed-brightgreen.svg)](tests/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://claude.com/claude-code)
 [![Languages](https://img.shields.io/badge/video-KO%20%7C%20EN-orange.svg)](#)
 
@@ -227,16 +227,25 @@ These are measured golden-set and regression-run results, not marketing estimate
 | **Orchestrator image cost** | **−95%** | `cache_write` 432,788 → 21,594 on the frame-reading calls |
 | **Orchestrator `cache_write`, whole run** | **−76%** | 185,965 → 43,923 raw, same 19-minute video |
 | **Total pipeline cost** | **−11%** | 2.82M → 2.50M effective tokens, same video, same window convention |
+| **Round 5 builder cost** | **−49%** | 1,382,095 → 698,126 effective tokens (41 → 16 calls), same video |
+| **Round 5 total cost** | **−10.4%** | $11.12 → $9.96 billed, same video, orchestrator on `opus` both sides |
 | **Download + analysis** | **8.1× faster** | 154s → 19s |
 | **Zoom extraction** | **5.4× faster** | 327s → 61s |
 | **Audit escalation** | **0%** | On the selected audit model |
-| **Tests** | **224 passing** | Current regression suite |
+| **Tests** | **266 passing** | Current regression suite |
 
 **Why total cost falls less than `cache_write`:** `cache_read` scales with how much conversation
 already precedes the run, not with the pipeline. Between the two measurements above it went
 464K → 631K (weighted) purely from session position, absorbing most of the `cache_write` win.
 Any cost claim here is therefore a same-video, same-window-convention comparison — see the
 re-measurement note in [`docs/eval/measure-cost.py`](docs/eval/measure-cost.py).
+
+**Round 5's builder win was partly clawed back by the orchestrator.** Adding call-count-control
+instructions to `SKILL.md` cut builder cost by 49%, but it also grew the orchestrator's own
+resident context (`cache_read` per call 82K → 101K, calls 27 → 38, +56% orchestrator cost) —
+netting only −10.4% overall instead of the −4~5.5× originally targeted. A model-tier lever
+(cheaper orchestrator) was attempted but not adopted: it caused incomplete runs or polling
+blowup in this measurement setup. Full trial-and-error log: [`docs/eval/reports/2026-08-18-round5.md`](docs/eval/reports/2026-08-18-round5.md).
 
 See [`docs/eval/`](docs/eval/) for the evaluation protocol and cost-accounting tool.
 
@@ -316,6 +325,7 @@ Every round had to demonstrate no quality regression or be rolled back.
 | **R2** | Added coverage audit, formatting/state-change checks, and crop-based re-reading | Injected errors detected; **OCR missed its gate and was rolled back** |
 | **R3** | Delegated guide construction to a Sonnet builder | Values remained **33/33** identical; narrative quality remained equivalent |
 | **R4** | Removed images from the orchestrator context | `cache_write` **−95%** on frame-reading calls (**−76%** across the whole run), total cost **−11%**, with a net quality improvement |
+| **R5** | Cut subagent call counts (parallel reads, single write, fewer crop/audit rounds); measured whether sample audits earn their cost | Builder cost **−49%** (41 → 16 calls); total cost **−10.4%** (orchestrator cost grew **+56%**, absorbing most of the builder win); sample audit fixed at 3 items after injected-error testing showed no detection-power loss vs. 6 |
 
 <details>
 <summary><b>Lessons worth keeping</b></summary>
@@ -415,6 +425,6 @@ If a tutorial breaks `tuto`, a public video URL and the missed timestamp are esp
 
 **If tuto saves you from scrubbing a video frame by frame, consider giving the repo a ⭐.**
 
-<sub>Built as a Claude Code plugin · 223 tests passing</sub>
+<sub>Built as a Claude Code plugin · 266 tests passing</sub>
 
 </div>
