@@ -666,6 +666,15 @@ _TYPE_LABELS = {
 }
 
 
+def _safe_ts(val) -> float:
+    """null·비수치 timestamp를 0.0으로 — --render는 저장된 파일에 단독 실행될 수 있어
+    validate를 안 거친 값이 올 수 있다 (파일 내 기존 try/except 관례와 동일)."""
+    try:
+        return float(val or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _evidence_tag(item: dict) -> str:
     srcs = {e.get("source") for e in (item.get("evidence") or []) if isinstance(e, dict)}
     if "frame" in srcs and "transcript" in srcs:
@@ -676,7 +685,7 @@ def _evidence_tag(item: dict) -> str:
 
 
 def _item_line(item: dict, text_key: str) -> str:
-    t = common.fmt_ts(float(item.get("timestamp", 0)))
+    t = common.fmt_ts(_safe_ts(item.get("timestamp")))
     line = f"- {item.get(text_key, '')} `(t={t})` [{_evidence_tag(item)}]"
     cf = item.get("conflict")
     if isinstance(cf, dict) and cf:
@@ -691,7 +700,7 @@ def render_video_md(ev: dict, cross_flags: int = 0, coverage_added: int = 0) -> 
         f"# {v.get('title', '(제목 없음)')}",
         "",
         f"- **URL**: {v.get('url', '')}",
-        f"- **길이**: {common.fmt_ts(float(v.get('duration') or 0))} · **채널**: {v.get('channel', '')}",
+        f"- **길이**: {common.fmt_ts(_safe_ts(v.get('duration')))} · **채널**: {v.get('channel', '')}",
         f"- **영상 유형**: {vt.get('primary', '?')} ({vt.get('confidence', '?')}) — {vt.get('basis', '')}",
         f"- **검증**: 교차 대조 flag {cross_flags}건 · 커버리지 보강 {coverage_added}건 · "
         "**표본 감사 미실시 — 근거는 프레임·자막으로 추적 가능하나 독립 검증되지 않음**",
@@ -716,8 +725,8 @@ def render_video_md(ev: dict, cross_flags: int = 0, coverage_added: int = 0) -> 
     lines += ["## 누락 후보", ""]
     for g in ev.get("gaps") or []:
         if isinstance(g, dict):
-            lines.append(f"- {common.fmt_ts(float(g.get('start', 0)))}–"
-                         f"{common.fmt_ts(float(g.get('end', 0)))} 구간 미확인 ({g.get('reason', '')})")
+            lines.append(f"- {common.fmt_ts(_safe_ts(g.get('start')))}–"
+                         f"{common.fmt_ts(_safe_ts(g.get('end')))} 구간 미확인 ({g.get('reason', '')})")
     for fl in ev.get("flags") or []:
         lines.append(f"- flag: {fl}")
     if not (ev.get("gaps") or ev.get("flags")):

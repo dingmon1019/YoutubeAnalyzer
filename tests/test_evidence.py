@@ -977,3 +977,15 @@ def test_render_cli_writes_file(tmp_path):
     assert rc == 0
     out = (tmp_path / "video.md").read_text(encoding="utf-8")
     assert "# 테스트 영상" in out
+
+
+def test_render_survives_null_timestamps():
+    """--render는 저장된 evidence에 단독 실행된다 — null timestamp가 traceback을 내면
+    fail-loud 관례(사용자 노출 traceback 금지) 위반이다."""
+    ev = _render_fixture()
+    ev["knowledge_items"][0]["timestamp"] = None
+    ev["gaps"][0]["start"] = None
+    ev["video"]["duration"] = "abc"
+    md = evidence.render_video_md(ev)
+    assert "(t=00:00)" in md          # null → 0으로 강등, 크래시 없음
+    assert "# 테스트 영상" in md
