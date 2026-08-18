@@ -81,3 +81,5 @@ def test_frontmatter_present():
     assert "name: tuto" in head
     assert "argument-hint" in head
     assert "user-invocable: true" in head
+    assert "description:" in head
+    assert "allowed-tools:" in head

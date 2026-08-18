@@ -220,7 +220,9 @@ Follow-up questions in the same session reuse cached frames and captions, so the
 
 These are measured golden-set and regression-run results, not marketing estimates. The evaluation protocol uses 3–5 user-verified tutorials and is intended for per-video regression diagnosis, not statistical generalization.
 
-**v0.4.0(위임 파이프라인) 기준 — v0.5.0 solo는 재측정 예정.**
+**v0.4.0(위임 파이프라인) 기준. v0.5.0 solo 실측: $2.91 · 12.1 min (opus session, measured
+2026-08-18; $1.5 target missed, accepted) — 상세는
+[`docs/eval/reports/2026-08-18-round5.md`](docs/eval/reports/2026-08-18-round5.md#solo-모드-v050-실측) 참고.**
 
 | Metric | Result | Meaning |
 |---|:---:|---|
@@ -282,7 +284,7 @@ Uniform sampling and scene-change detection can skip static screens—exactly wh
 
 ### 2. Resolution tiering
 
-Text-heavy frames such as slides, tables, menus, and terminals are extracted at **1024px**; illustrations, transitions, and talking heads use **512px**. Frames not observed during the map pass default to 1024px rather than being assumed irrelevant. `zoom.py` itself will not process more than 20 high-resolution frames or 60 total frames per call. In solo mode the orchestrator makes a **single** `zoom.py` call and keeps it far under that ceiling — a self-imposed budget of 4 high-resolution frames and 6 total, plus at most one `--crop` follow-up.
+Text-heavy frames such as slides, tables, menus, and terminals are extracted at **1024px**; illustrations, transitions, and talking heads use **512px**. Zoom points chosen without map coverage should be requested at 1024px (see SKILL §2). `zoom.py` itself will not process more than 20 high-resolution frames or 60 total frames per call. In solo mode the orchestrator makes a **single** `zoom.py` call and keeps it far under that ceiling — a self-imposed budget of 4 high-resolution frames and 6 total, plus at most one `--crop` follow-up.
 
 ### 3. Gap detection
 
@@ -329,7 +331,7 @@ Every round had to demonstrate no quality regression or be rolled back.
 | **R3** | Delegated guide construction to a Sonnet builder | Values remained **33/33** identical; narrative quality remained equivalent |
 | **R4** | Removed images from the orchestrator context | `cache_write` **−95%** on frame-reading calls (**−76%** across the whole run), total cost **−11%**, with a net quality improvement |
 | **R5** | Cut subagent call counts (parallel reads, single write, fewer crop/audit rounds); measured whether sample audits earn their cost | Builder cost **−49%** (41 → 16 calls); total cost **−10.4%** (orchestrator cost grew **+56%**, absorbing most of the builder win); sample audit fixed at 3 items after injected-error testing showed no detection-power loss vs. 6 |
-| **R6 (solo)** | Removed delegation entirely — the orchestrator runs MAP through CROSS-CHECK itself instead of handing frame-reading and document-writing to separate agents; removed sample audits, leaving deterministic cross-check plus a single `haiku` coverage-audit call as the only verification | Sample audits corrected **0 / 24** verdicts across 4 videos before removal — basis for cutting them; solo cost/time is a **v0.5.0 target — ~$1.2 (ceiling $1.5), ~12–15min (ceiling 20min) — not yet re-measured** — see [Measured results](#measured-results) |
+| **R6 (solo)** | Removed delegation entirely — the orchestrator runs MAP through CROSS-CHECK itself instead of handing frame-reading and document-writing to separate agents; removed sample audits, leaving deterministic cross-check plus a single `haiku` coverage-audit call as the only verification | Sample audits corrected **0 / 24** verdicts across 4 videos before removal — basis for cutting them; solo cost/time: **$2.91 · 12.1 min (opus session, measured 2026-08-18; $1.5 target missed, accepted)** — see [Measured results](#measured-results) |
 
 <details>
 <summary><b>Lessons worth keeping</b></summary>
@@ -414,7 +416,7 @@ If a tutorial breaks `tuto`, a public video URL and the missed timestamp are esp
 
 | Document | Purpose |
 |---|---|
-| [`skills/tuto/SKILL.md`](skills/tuto/SKILL.md) | Pipeline and orchestration contract |
+| [`skills/tuto/SKILL.md`](skills/tuto/SKILL.md) | Solo pipeline contract |
 | [`docs/superpowers/specs/`](docs/superpowers/specs/) | Design specs by iteration |
 | [`docs/superpowers/plans/`](docs/superpowers/plans/) | Implementation plans |
 | [`docs/eval/evidence-schema.md`](docs/eval/evidence-schema.md) | **evidence.json schema — canonical spec** |

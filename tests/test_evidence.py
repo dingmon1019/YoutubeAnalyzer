@@ -913,6 +913,6 @@ def test_cross_check_promotion_is_capped_at_one():
 
 
 def test_audit_candidates_default_limit_is_three():
-    """라운드5 이월: SKILL.md는 3건으로 고정했는데 기본값이 6이면 인자 없는 호출이 조용히 6으로 회귀한다."""
+    """라운드5 이월: 구 정밀 파이프라인이 3건으로 고정했었고 solo에서도 낡은 기본값 6이 되살아나면 안 되므로 기본값이 6이면 인자 없는 호출이 조용히 6으로 회귀한다."""
     import inspect
     assert inspect.signature(evidence.audit_candidates).parameters["limit"].default == 3
