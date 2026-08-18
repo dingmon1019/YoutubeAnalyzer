@@ -194,11 +194,11 @@ def test_crop_mode_malformed_input_fails_loud(tmp_path, monkeypatch, capsys):
     assert "ERROR" in capsys.readouterr().err
 
 
-def test_crop_mode_caps_at_five_specs(tmp_path, monkeypatch, capsys):
-    """SKILL.md의 '영상당 크롭 ≤2회' 산문 상한을 코드로 배선 — 3건 이상이면 fail-loud."""
+def test_crop_mode_caps_at_two_specs(tmp_path, monkeypatch, capsys):
+    """SKILL.md의 '영상당 크롭 ≤2회' 산문 상한을 코드로 배선 — 4건 이상이면 fail-loud."""
     cd = tmp_path / "abc12345678"
     (cd / "frames").mkdir(parents=True)
-    specs = ",".join(f"f{i}.jpg@0,0,10,10" for i in range(3))
+    specs = ",".join(f"f{i}.jpg@0,0,10,10" for i in range(4))
     monkeypatch.setattr(zoom.common, "CACHE_ROOT", tmp_path)
     monkeypatch.setattr(zoom.sys, "argv", ["zoom.py", "abc12345678", "--crop", specs])
     assert zoom.main() == 1

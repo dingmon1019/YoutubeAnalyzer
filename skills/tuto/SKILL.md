@@ -239,7 +239,7 @@ python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --add-frames "<cache_dir>
 - 캐시 디렉토리 경로와 **kept FRAME 경로 전부**(지도+확대), `<cache_dir>/pass1-report.txt` 경로
 - §2가 판정한 `영상유형`과 패스1의 `TYPE_HINT`
 - 아래 산출 계약과 "검증 규칙" 4개의 **전문**
-- 재확대 수단: `python "<SKILL_DIR>/scripts/zoom.py" <id> --crop "<프레임>@x,y,w,h"` (호출당 5건 이내 — 코드 캡 있음)
+- 재확대 수단: `python "<SKILL_DIR>/scripts/zoom.py" <id> --crop "<프레임>@x,y,w,h"` (호출당 2건 이내 — 코드 캡 있음)
 
 ### 산출 계약 — 순서가 고정이다
 
@@ -462,9 +462,6 @@ python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --coverage-input
 별도 Sonnet Agent에 **자막 전문·챕터·DESC_TIMESTAMPS + `--coverage-input` 출력**을 보낸다
 (video.md 본문·제목은 주지 않는다):
 
-이 에이전트가 누락 후보를 프레임으로 재확인하는 것은 유용하지만, **프레임은 3장 이내**로
-제한한다 — 실측(2026-08-18)에서 커버리지 감사가 자율적으로 15장을 열어 $0.58을 썼다.
-
 > "아래 소스에서 **기대 지식 체크리스트**를 먼저 만들어라 — 이 영상을 보지 않은 에이전트가
 > 작업하거나 설명하려면 알아야 할 것이다. 범주는 영상에 실제로 있는 것만 쓴다:
 > concept · claim · procedure · action · command · setting · prerequisite · result ·
@@ -478,6 +475,10 @@ python "<SKILL_DIR>/scripts/evidence.py" "<cache_dir>" --coverage-input
 >
 > 단 **관측은 존재 신호이지 값의 정본이 아니다.** 관측 문구를 그대로 지식으로 옮기지 마라 —
 > 정확한 값은 원본 프레임으로 재확인해야 한다.
+>
+> **누락 후보를 원본 프레임으로 재확인해도 좋다. 단 프레임은 3장 이내로 연다** — 실측
+> (2026-08-18)에서 커버리지 감사가 15장을 열어 $0.58을 썼다. 관측 목록과 자막으로 먼저
+> 판단하고, 꼭 필요한 곳만 확인하라.
 >
 > 그런 다음 `EVIDENCE DIGEST`와 대조해, 체크리스트에는 있으나 digest에 없는 항목만
 > `- [MM:SS] [type] <내용> — 근거: <자막 인용 또는 관측 + 프레임>` 형식으로 반환하라.
