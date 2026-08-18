@@ -888,3 +888,25 @@ def test_cross_check_skips_items_without_id():
         {"id": "v2", "value": "commit 3f4a0625", "timestamp": 2.0},
     ]}
     assert evidence.cross_check_values(ev) == []
+
+
+def test_cross_check_promotion_is_capped_at_one():
+    """표본 3건 체제에서 오탐이 슬롯을 과점하지 않도록 승격은 1건까지만이다."""
+    ev = {
+        "visual_evidence": [
+            {"id": "v1", "value": "count 100"}, {"id": "v2", "value": "count 200"},
+            {"id": "v3", "value": "total 3f4a625"}, {"id": "v4", "value": "total 3f4a0625"},
+        ],
+        "claims": [],
+        "knowledge_items": [
+            {"id": "k1", "type": "command", "content": "npm install -g x", "timestamp": 1.0,
+             "evidence": [{"source": "frame", "ref": "v9"}]},
+            {"id": "k2", "type": "example", "content": "예시 A", "timestamp": 2.0,
+             "evidence": [{"source": "frame", "ref": "v1"}]},
+            {"id": "k3", "type": "example", "content": "예시 B", "timestamp": 3.0,
+             "evidence": [{"source": "frame", "ref": "v3"}]},
+        ],
+    }
+    got = [c["id"] for c in evidence.audit_candidates(ev, limit=3)]
+    assert got[0] in ("k2", "k3"), "flag된 항목 1건은 최상위로 승격된다"
+    assert "k1" in got[:2], "나머지 슬롯은 행동 영향도 순서(command)가 차지해야 한다"

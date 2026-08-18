@@ -105,7 +105,7 @@ If a value cannot be read safely, `tuto` emits `⚠️ needs visual check` inste
 }
 ```
 
-Confidence is **never a fabricated number** — the pipeline has no basis for probability estimates, so only `high|medium|low` and `verified|disputed|unverifiable|unaudited` are allowed. `unaudited` is deliberately distinct from `verified`: sample audits cover 6 claims, so most claims are simply not audited, and that must not look like passing.
+Confidence is **never a fabricated number** — the pipeline has no basis for probability estimates, so only `high|medium|low` and `verified|disputed|unverifiable|unaudited` are allowed. `unaudited` is deliberately distinct from `verified`: sample audits cover 3 claims, so most claims are simply not audited, and that must not look like passing.
 
 Full spec: [`docs/eval/evidence-schema.md`](docs/eval/evidence-schema.md)
 
@@ -207,7 +207,7 @@ No API key is required. Transcript acquisition falls back through native caption
 3. ⚠️ The exact checkbox and click moments are hidden by a transition. (t=03:51)
 
 ## Audit stamp
-Sample audit: 5/6 claims matched, 1 corrected; 1 claim escalated for re-checking.
+Sample audit: 2/3 claims matched, 1 corrected; 1 claim escalated for re-checking.
 Coverage audit: 2 missing knowledge items recovered.
 ```
 
@@ -256,7 +256,7 @@ See [`docs/eval/`](docs/eval/) for the evaluation protocol and cost-accounting t
 ```text
 MAP              ZOOM             EVIDENCE          VERIFY            ORGANIZE
 ──────────       ──────────       ──────────        ──────────        ──────────
-analyze.py       reading agent    builder           sample audits ×6  builder
+analyze.py       reading agent    builder           sample audits ×3  builder
 ├ yt-dlp         → zoom-plan      ├ frame reading   ├ independent ctx ├ 9 coverage
 ├ captions       ├ caption cues   ├ crop + re-read  ├ "try to refute"   questions
 ├ heatmap        ├ chapter bounds ├ visual_evidence ├ escalate        ├ outline chosen

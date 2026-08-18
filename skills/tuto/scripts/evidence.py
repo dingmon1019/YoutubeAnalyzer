@@ -516,13 +516,25 @@ def audit_candidates(ev: dict, limit: int = 6) -> list:
                      "content": c.get("claim", ""), "timestamp": c.get("timestamp"),
                      "evidence": c.get("evidence") or []})
     # 교차 대조에 걸린 근거를 쓰는 항목은 표본 최상위로 — 표본 감사가 놓친 실제 오류
-    # 유형이 정확히 이것이었다(2026-08-18).
+    # 유형이 정확히 이것이었다(2026-08-18). 단, 승격은 **최대 1건**이다 — 표본이 3건으로
+    # 줄어든 체제에서 flag된 항목이 여러 개면 오탐 하나가 슬롯을 과점한다
+    # (2026-08-18 최종 리뷰). flag된 항목이 여럿이면 AUDIT_PRIORITY 상위 1건만 올리고
+    # 나머지는 flag가 없는 것처럼 원래 순위로 되돌아간다.
     flagged = set()
     for f in cross_check_values(ev):
         flagged.update(f["ids"])
+    def _is_flagged(x):
+        return any(e.get("ref") in flagged for e in x["evidence"]
+                   if isinstance(e, dict) and e.get("source") == "frame")
+    flagged_items = [x for x in pool if _is_flagged(x)]
+    promoted_id = None
+    if flagged_items:
+        promoted_id = min(
+            flagged_items,
+            key=lambda x: (rank.get(x["type"], len(rank)), str(x["id"])),
+        )["id"]
     def _flag_rank(x):
-        return 0 if any(e.get("ref") in flagged for e in x["evidence"]
-                        if isinstance(e, dict) and e.get("source") == "frame") else 1
+        return 0 if promoted_id is not None and x["id"] == promoted_id else 1
     pool.sort(key=lambda x: (_flag_rank(x), rank.get(x["type"], len(rank)), str(x["id"])))
     return pool[:limit]
 
