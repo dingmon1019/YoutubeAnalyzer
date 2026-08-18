@@ -11,9 +11,9 @@ Turn YouTube videos into **verified working knowledge** for AI agents — transc
 AI가 대신 영상을 보고, 자막과 화면을 함께 이해하고, 검증된 지식으로 변환합니다.
 이후 AI는 그 내용을 설명하거나 질문에 답하고, 현재 작업과 비교하거나 튜토리얼을 따라 할 수 있습니다.
 
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-266%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-241%20passed-brightgreen.svg)](tests/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://claude.com/claude-code)
 [![Languages](https://img.shields.io/badge/video-KO%20%7C%20EN-orange.svg)](#)
 
@@ -72,7 +72,7 @@ The values that matter in a video are often **never spoken** — they exist only
     { "source": "transcript", "ref": "42" }
   ],
   "conflict": { "transcript": "16배", "screen": "16.3x" },
-  "verification": { "status": "verified", "auditor": "sonnet" }
+  "verification": { "status": "unaudited" }
 }
 ```
 
@@ -105,7 +105,7 @@ If a value cannot be read safely, `tuto` emits `⚠️ needs visual check` inste
 }
 ```
 
-Confidence is **never a fabricated number** — the pipeline has no basis for probability estimates, so only `high|medium|low` and `verified|disputed|unverifiable|unaudited` are allowed. `unaudited` is deliberately distinct from `verified`: sample audits cover 3 claims, so most claims are simply not audited, and that must not look like passing.
+Confidence is **never a fabricated number** — the pipeline has no basis for probability estimates, so only `high|medium|low` and `verified|disputed|unverifiable|unaudited` are allowed. `unaudited` is deliberately distinct from `verified`: 표본 감사는 v0.5.0에서 제거됐다(실측: 4편 24건 판정 수정 0건) — 커버리지 감사(haiku)와 결정론적 교차 대조가 검증을 담당한다. No remaining step assigns `verified`, so a v0.5.0 `evidence.json` shows `unaudited` on effectively every item — that must not look like passing. See [Limitations](#limitations).
 
 Full spec: [`docs/eval/evidence-schema.md`](docs/eval/evidence-schema.md)
 
@@ -206,9 +206,10 @@ No API key is required. Transcript acquisition falls back through native caption
    "Add Python 3.9 to PATH" is unchecked at this frame. (t=03:23)
 3. ⚠️ The exact checkbox and click moments are hidden by a transition. (t=03:51)
 
-## Audit stamp
-Sample audit: 2/3 claims matched, 1 corrected; 1 claim escalated for re-checking.
-Coverage audit: 2 missing knowledge items recovered.
+## Verification stamp
+Sample audit: not run in v0.5.0 — evidence is frame/caption-traceable but not independently audited.
+Cross-check: 1 value disagreement found, re-read and corrected before writing.
+Coverage audit (haiku): 1 missing knowledge item recovered.
 ```
 
 Follow-up questions in the same session reuse cached frames and captions, so the video does not need to be downloaded again.
@@ -218,6 +219,8 @@ Follow-up questions in the same session reuse cached frames and captions, so the
 ## Measured results
 
 These are measured golden-set and regression-run results, not marketing estimates. The evaluation protocol uses 3–5 user-verified tutorials and is intended for per-video regression diagnosis, not statistical generalization.
+
+**v0.4.0(위임 파이프라인) 기준 — v0.5.0 solo는 재측정 예정.**
 
 | Metric | Result | Meaning |
 |---|:---:|---|
@@ -232,7 +235,7 @@ These are measured golden-set and regression-run results, not marketing estimate
 | **Download + analysis** | **8.1× faster** | 154s → 19s |
 | **Zoom extraction** | **5.4× faster** | 327s → 61s |
 | **Audit escalation** | **0%** | On the selected audit model |
-| **Tests** | **266 passing** | Current regression suite |
+| **Tests** | **241 passing** | Current regression suite (`python -m pytest tests/ -q`) |
 
 **Why total cost falls less than `cache_write`:** `cache_read` scales with how much conversation
 already precedes the run, not with the pipeline. Between the two measurements above it went
@@ -254,17 +257,19 @@ See [`docs/eval/`](docs/eval/) for the evaluation protocol and cost-accounting t
 ## How it works
 
 ```text
-MAP              ZOOM             EVIDENCE          VERIFY            ORGANIZE
-──────────       ──────────       ──────────        ──────────        ──────────
-analyze.py       reading agent    builder           sample audits ×3  builder
-├ yt-dlp         → zoom-plan      ├ frame reading   ├ independent ctx ├ 9 coverage
-├ captions       ├ caption cues   ├ crop + re-read  ├ "try to refute"   questions
-├ heatmap        ├ chapter bounds ├ visual_evidence ├ escalate        ├ outline chosen
-├ chapters       ├ activity cover ├ claims          └ coverage audit    per video
-├ activity peaks ├ gap detection  └ knowledge_items        ↓          └ video.md
-└ map frames     └ visual-coverage.json      ↓            --verdicts
-                                   evidence.json ←─────────┘
+MAP                    READ (parallel)        ZOOM                   EVIDENCE               CROSS-CHECK            COVERAGE (haiku)       ORGANIZE
+──────────             ──────────             ──────────             ──────────             ──────────             ──────────             ──────────
+analyze.py             map frames             zoom.py                evidence.py            evidence.py            1 subagent             video.md
+├ yt-dlp               ├ parallel Read        ├ 1 call only          ├ --merge              ├ --cross-check        ├ digest+pass1 only    ├ single Write
+├ captions             ├ pick zoom points     ├ 4×1024 max           ├ visual_evidence      ├ hash/number reread   ├ no image Read        ├ free-form structure
+├ heatmap              ├ cue-word first       ├ 6 frames total       ├ claims               ├ zero extra cost      └ gaps → merge         ├ (t=MM:SS) refs
+├ chapters             └ +1 for 60s gaps      └ 1 crop max           └ knowledge_items      └ no subagent                                 └ verification stamp
+├ activity peaks
+└ map frames
 ```
+
+No delegation — the orchestrating agent runs MAP through CROSS-CHECK itself, in one context. The
+only subagent call in the pipeline is the coverage audit (`haiku`), which never reads images.
 
 `evidence.json`이 정본이고 `video.md`는 그것을 사람이 읽게 조직한 것입니다.
 **문서를 먼저 쓰고 근거를 맞추지 않습니다** — 순서가 바뀌면 문서에 맞춰 근거를 지어내게 됩니다.
@@ -277,19 +282,19 @@ Uniform sampling and scene-change detection can skip static screens—exactly wh
 
 ### 2. Resolution tiering
 
-Text-heavy frames such as slides, tables, menus, and terminals are extracted at **1024px**; illustrations, transitions, and talking heads use **512px**. Frames not observed during the map pass default to 1024px rather than being assumed irrelevant. The zoom budget is capped at 20 high-resolution frames and 60 total frames per session. Unclear regions are re-read with `zoom.py --crop`, capped at five crops per video.
+Text-heavy frames such as slides, tables, menus, and terminals are extracted at **1024px**; illustrations, transitions, and talking heads use **512px**. Frames not observed during the map pass default to 1024px rather than being assumed irrelevant. `zoom.py` itself will not process more than 20 high-resolution frames or 60 total frames per call. In solo mode the orchestrator makes a **single** `zoom.py` call and keeps it far under that ceiling — a self-imposed budget of 4 high-resolution frames and 6 total, plus at most one `--crop` follow-up.
 
 ### 3. Gap detection
 
 Low-motion verification sections near the end of tutorials are easy for samplers to miss. `tuto` explicitly revisits gaps of **60 seconds or more**. This rule was added after two measured runs omitted entire conclusion sections.
 
-### 4. Independent adversarial audit
+### 4. Deterministic cross-check
 
-High-value claims **and actionable knowledge items** are independently challenged against their source evidence. A fresh agent receives a single item and its evidence—**not the rendered document**—and is asked to refute it. Disagreements can be escalated for re-checking.
+Per-claim adversarial sample audits — a fresh agent independently trying to refute a sampled subset of claims — were removed in v0.5.0: 표본 감사는 v0.5.0에서 제거됐다(실측: 4편 24건 판정 수정 0건) — 커버리지 감사(haiku)와 결정론적 교차 대조가 검증을 담당한다.
 
-Sampling is ordered by how much an item can affect an agent's actions: `command` · `setting` · `action` · `criterion` · `prerequisite` · `warning` · … · `concept`. A misread `command` is more dangerous in practice than a misread claim.
+`evidence.py --cross-check` re-reads hashed and numeric values across `visual_evidence`, `claims`, and `knowledge_items` looking for internal disagreement — at **zero additional cost**, since it is deterministic post-processing rather than a subagent call. Frames it flags are re-read once and the value is corrected via `merge` before `video.md` is written.
 
-This reduces confirmation bias from having the same model both write and approve its own answer.
+Cross-check cannot catch a reading that is wrong but internally *consistent* — a value nobody disagreed with is not the same as a value someone independently verified. That gap is why `verification.status` defaults to, and in solo mode effectively stays at, `unaudited` (see [Limitations](#limitations)).
 
 ### 5. Coverage audit
 
@@ -297,9 +302,7 @@ Coverage audit builds an **expected knowledge checklist** from the source and co
 
 An adaptive `video.md` heading like `## Phase 1` says nothing about what it contains, and `evidence.json` is the canonical source anyway. So completeness is checked as `source → evidence` first, and `evidence → video.md` second.
 
-**The source includes independent visual observations.** Values that appear only on screen and are never spoken are this project's whole point — but if the builder misses one, a captions-only coverage check cannot even know it existed. So the reading agent, which is **already looking at the map frames**, also records lightweight existence signals (`visual-coverage.json`): *"a terminal command is visible here"*, *"installer options are visible here"*.
-
-This costs **no additional image reads** and keeps the roles separate — the reading agent observes, the builder extracts, the coverage agent compares. Observations are existence signals, never the source of truth for a value.
+It is the pipeline's **only** subagent call, and it runs on `haiku`: it receives `evidence.py --coverage-input` (a digest of `claims`/`knowledge_items`) plus the `pass1-report.txt` transcript — **text only, image reads are explicitly forbidden in its prompt.** It is asked what a viewer of the transcript would expect to know that the digest does not already contain, not asked to re-derive values from frames. Candidates it returns are checked against the transcript before being merged in — coverage audit proposes gaps, it does not write them unconfirmed.
 
 ---
 
@@ -326,6 +329,7 @@ Every round had to demonstrate no quality regression or be rolled back.
 | **R3** | Delegated guide construction to a Sonnet builder | Values remained **33/33** identical; narrative quality remained equivalent |
 | **R4** | Removed images from the orchestrator context | `cache_write` **−95%** on frame-reading calls (**−76%** across the whole run), total cost **−11%**, with a net quality improvement |
 | **R5** | Cut subagent call counts (parallel reads, single write, fewer crop/audit rounds); measured whether sample audits earn their cost | Builder cost **−49%** (41 → 16 calls); total cost **−10.4%** (orchestrator cost grew **+56%**, absorbing most of the builder win); sample audit fixed at 3 items after injected-error testing showed no detection-power loss vs. 6 |
+| **R6 (solo)** | Removed delegation entirely — the orchestrator runs MAP through CROSS-CHECK itself instead of handing frame-reading and document-writing to separate agents; removed sample audits, leaving deterministic cross-check plus a single `haiku` coverage-audit call as the only verification | Sample audits corrected **0 / 24** verdicts across 4 videos before removal — basis for cutting them; solo cost/time is a **v0.5.0 target — ~$1.2 (ceiling $1.5), ~12–15min (ceiling 20min) — not yet re-measured** — see [Measured results](#measured-results) |
 
 <details>
 <summary><b>Lessons worth keeping</b></summary>
@@ -374,6 +378,7 @@ See [`docs/eval/golden-set-protocol.md`](docs/eval/golden-set-protocol.md).
 - `tuto` verifies **screen ↔ claim consistency**. It does **not** prove that the video's advice itself is factually correct.
 - Values not visible in evidence frames are intentionally left unresolved instead of inferred.
 - Developed and validated on Windows. macOS/Linux are not yet fully validated.
+- 산출물은 근거 추적은 되나 표본 감사를 거치지 않는다 — 값은 프레임으로 재확인 가능하다.
 
 ---
 
@@ -425,6 +430,6 @@ If a tutorial breaks `tuto`, a public video URL and the missed timestamp are esp
 
 **If tuto saves you from scrubbing a video frame by frame, consider giving the repo a ⭐.**
 
-<sub>Built as a Claude Code plugin · 266 tests passing</sub>
+<sub>Built as a Claude Code plugin · 241 tests passing</sub>
 
 </div>
