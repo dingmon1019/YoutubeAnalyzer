@@ -1,10 +1,14 @@
-"""solo SKILL.md 계약 정적 검증.
+"""오케스트레이터 SKILL.md 계약 정적 검증.
 
-v0.5.0에서 위임 오케스트레이션 문서를 solo 실행 문서로 전면 교체했다. 이 파일은
-그 교체와 함께 재작성됐다(구 테스트 36개 폐기 — 위임 계약 전용이었다).
+function-agents 라운드에서 solo 실행 문서를 오케스트레이터(본체 무이미지 + 일회용
+서브에이전트 판독/합성) 문서로 재배선했다. 판독·합성 세부 규칙(화면 우선·conflict·
+⚠️·TSV 레코드 스키마·행동 가능 content)의 정본은 이제 prompts/transcribe.md·
+synthesize.md이며, 그쪽 계약은 test_prompt_contract.py가 검증한다. 이 파일은
+오케스트레이터 자신의 계약만 검증한다.
 
-지키는 계약: ① watch 대비 차별점 6개, ② 콜 수 규율(병렬 Read·단일 Write),
-③ 정직성(표본 감사 미실시 명시), ④ 문서 길이 상한(다시 자라는 회귀 방지)."""
+지키는 계약: ① watch 대비 차별점 6개, ② 정직성(표본 감사 미실시 명시), ③ 문서 길이
+상한(다시 자라는 회귀 방지), ④ 오케스트레이터 전용 계약(본체 무이미지·프롬프트 파일
+디스패치·단일 batch from-lines·haiku/sonnet 역할 분리·콜 예산·산출물 미열람)."""
 from pathlib import Path
 
 SKILL = Path(__file__).parent.parent / "skills" / "tuto" / "SKILL.md"
@@ -48,24 +52,10 @@ def test_diff6_cached_followup():
     assert "재실행은 금지" in TEXT or "재실행 금지" in TEXT
 
 
-# ── 콜 수 규율 (라운드5 실측: 비용은 콜 수 × 상주 컨텍스트) ──
-
-def test_parallel_read_contract():
-    assert "한 응답에서 병렬" in TEXT
-
-
-def test_single_write_contract():
-    assert "한 번에 Write" in TEXT
-
-
 # ── 정직성 ──
 
 def test_declares_no_sample_audit():
     assert "표본 감사 미실시" in TEXT
-
-
-def test_gaps_are_time_ranges():
-    assert "시간 구간 객체만" in TEXT
 
 
 # ── 길이 상한 (문서가 다시 자라면 매 콜 비용으로 직결된다) ──
@@ -101,3 +91,29 @@ def test_no_bare_merge_instructions():
 
 def test_render_note_wired():
     assert "--note" in TEXT
+
+
+class TestOrchestratorContract:
+    def test_main_never_reads_images(self):
+        assert "이미지" in TEXT and "Read하지 않는다" in TEXT
+
+    def test_dispatches_prompt_files(self):
+        assert "prompts/transcribe.md" in TEXT
+        assert "prompts/synthesize.md" in TEXT
+
+    def test_vision_returns_zoom_request(self):
+        # 본체가 이미지 없이 확대를 결정하는 유일한 통로
+        assert "Z:" in TEXT
+
+    def test_single_from_lines_batch(self):
+        # vision-*.lines 직접 merge 금지 — id_offset 함정
+        assert "vision" in TEXT and "patch.lines" in TEXT
+
+    def test_haiku_vision_sonnet_synthesis(self):
+        assert '"haiku"' in TEXT and '"sonnet"' in TEXT
+
+    def test_call_budget_present(self):
+        assert "12콜" in TEXT
+
+    def test_no_echo_of_artifacts(self):
+        assert "echo" in TEXT or "열어보지" in TEXT
