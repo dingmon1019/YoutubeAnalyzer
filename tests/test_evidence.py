@@ -989,3 +989,61 @@ def test_render_survives_null_timestamps():
     md = evidence.render_video_md(ev)
     assert "(t=00:00)" in md          # null → 0으로 강등, 크래시 없음
     assert "# 테스트 영상" in md
+
+
+# ── --from-lines 컴팩트 patch 확장기 ────────────────────────────────────────
+
+_LINES = (
+    "T\ttutorial\thigh\t화면 실연\n"
+    "V\tui\t132.0\tt0212_1024.jpg\thigh\t16.3x 표시\n"
+    "K\tcommand\t88.0\tv1;t12\tpip install -U yt-dlp\n"
+    "C\t132.0\tv1;t12\t속도가 빨라진다\tconflict=16배=>16.3x\n"
+    "G\t350.0\t469.0\t지도 공백\n"
+)
+
+
+def test_expand_lines_builds_full_patch():
+    p = evidence.expand_lines(_LINES)
+    assert p["video_type"] == {"primary": "tutorial", "confidence": "high", "basis": "화면 실연"}
+    ve = p["visual_evidence"][0]
+    assert ve["id"] == "v1" and ve["timestamp"] == 132.0 and ve["frame"] == "t0212_1024.jpg"
+    k = p["knowledge_items"][0]
+    assert k["evidence"] == [{"source": "frame", "ref": "v1"}, {"source": "transcript", "ref": "12"}]
+    c = p["claims"][0]
+    assert c["conflict"] == {"transcript": "16배", "screen": "16.3x"}
+    assert c["verification"] == {"status": "unaudited"}
+    assert p["gaps"] == [{"start": 350.0, "end": 469.0, "reason": "지도 공백"}]
+
+
+def test_expand_lines_rejects_unknown_record():
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        evidence.expand_lines("X\t뭔가\n")
+
+
+def test_expand_lines_merge_equivalence(tmp_path):
+    """확장 결과가 손으로 쓴 JSON patch와 동일한 merge 결과를 내야 한다 (기준점 2)."""
+    import json as _json
+    base = {"schema_version": "0.3", "video": {"id": "x", "duration": 687.0},
+            "video_type": {}, "provenance": {"frames": {"map": [
+                {"file": "t0212_1024.jpg", "t": 132.0}], "zoom": []}, "transcript": {}},
+            "segments": [{"start": float(i), "text": f"s{i}"} for i in range(20)],
+            "visual_evidence": [], "claims": [], "knowledge_items": [], "gaps": [], "flags": []}
+    evidence.save(tmp_path, _json.loads(_json.dumps(base)))
+    merged_a = evidence.merge(_json.loads(_json.dumps(base)), evidence.expand_lines(_LINES))
+    json_patch = {
+        "video_type": {"primary": "tutorial", "confidence": "high", "basis": "화면 실연"},
+        "visual_evidence": [{"id": "v1", "type": "ui", "value": "16.3x 표시",
+                             "timestamp": 132.0, "frame": "t0212_1024.jpg", "confidence": "high"}],
+        "knowledge_items": [{"type": "command", "content": "pip install -U yt-dlp", "timestamp": 88.0,
+                             "evidence": [{"source": "frame", "ref": "v1"},
+                                          {"source": "transcript", "ref": "12"}]}],
+        "claims": [{"claim": "속도가 빨라진다", "timestamp": 132.0,
+                    "evidence": [{"source": "frame", "ref": "v1"},
+                                 {"source": "transcript", "ref": "12"}],
+                    "conflict": {"transcript": "16배", "screen": "16.3x"},
+                    "verification": {"status": "unaudited"}}],
+        "gaps": [{"start": 350.0, "end": 469.0, "reason": "지도 공백"}]}
+    merged_b = evidence.merge(_json.loads(_json.dumps(base)), json_patch)
+    for key in ("visual_evidence", "claims", "knowledge_items", "gaps"):
+        assert merged_a[key] == merged_b[key], key

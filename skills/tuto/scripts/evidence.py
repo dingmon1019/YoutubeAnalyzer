@@ -426,6 +426,64 @@ def _next_id(items: list, prefix: str) -> str:
     return f"{prefix}{len(items) + 1}"
 
 
+# ── 컴팩트 patch 라인 확장기 — LLM이 JSON 보일러플레이트(따옴표·중괄호·필드명)를
+# 출력하던 토큰을 30~40% 줄인다. 확장 결과는 기존 merge/validate 게이트를 그대로 탄다.
+
+def _parse_refs(spec: str) -> list:
+    out = []
+    for tok in (spec or "").split(";"):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if tok.startswith("v"):
+            out.append({"source": "frame", "ref": tok})
+        elif tok.startswith("t"):
+            out.append({"source": "transcript", "ref": tok[1:]})
+        else:
+            raise ValueError(f"알 수 없는 근거 참조: {tok!r} (v#=frame, t#=transcript)")
+    return out
+
+
+def expand_lines(text: str) -> dict:
+    """TAB 구분 라인(T/V/K/C/G)을 evidence patch dict로 확장한다. 형식 위반은
+    ValueError로 fail-loud — 조용히 건너뛰면 지식이 소리 없이 유실된다."""
+    patch = {"visual_evidence": [], "claims": [], "knowledge_items": [], "gaps": []}
+    vn = 0
+    for ln, raw in enumerate(text.splitlines(), 1):
+        if not raw.strip():
+            continue
+        f = raw.split("\t")
+        kind = f[0].strip()
+        try:
+            if kind == "T":
+                patch["video_type"] = {"primary": f[1], "confidence": f[2], "basis": f[3]}
+            elif kind == "V":
+                vn += 1
+                patch["visual_evidence"].append({
+                    "id": f"v{vn}", "type": f[1], "timestamp": float(f[2]),
+                    "frame": f[3], "confidence": f[4], "value": f[5]})
+            elif kind == "K":
+                patch["knowledge_items"].append({
+                    "type": f[1], "timestamp": float(f[2]),
+                    "evidence": _parse_refs(f[3]), "content": f[4]})
+            elif kind == "C":
+                c = {"timestamp": float(f[1]), "evidence": _parse_refs(f[2]),
+                     "claim": f[3], "verification": {"status": "unaudited"}}
+                if len(f) > 4 and f[4].startswith("conflict="):
+                    a, _, b = f[4][len("conflict="):].partition("=>")
+                    c["conflict"] = {"transcript": a, "screen": b}
+                patch["claims"].append(c)
+            elif kind == "G":
+                patch["gaps"].append({"start": float(f[1]), "end": float(f[2]), "reason": f[3]})
+            else:
+                raise ValueError(f"알 수 없는 레코드 종류: {kind!r}")
+        except (IndexError, ValueError) as e:
+            if isinstance(e, ValueError) and ("레코드" in str(e) or "근거 참조" in str(e)):
+                raise
+            raise ValueError(f"{ln}행 형식 오류 ({kind}): {raw[:80]!r} — {e}") from e
+    return patch
+
+
 def merge(ev: dict, patch: dict) -> dict:
     """LLM 산출물을 골격에 병합한다.
 
@@ -753,6 +811,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="evidence.json 병합·검증")
     ap.add_argument("cache_dir")
     ap.add_argument("--merge", help="병합할 patch json 경로")
+    ap.add_argument("--from-lines", dest="from_lines",
+                    help="컴팩트 TSV 라인 파일을 patch로 확장해 병합 (T/V/K/C/G)")
     ap.add_argument("--verdicts", help="감사 판정 json 경로 (claim_id/status/auditor/note 배열)")
     ap.add_argument("--add-frames", dest="add_frames",
                     help="확대 프레임 등록 — zoom.py 출력을 담은 파일 경로 (FRAME 줄 파싱)")
@@ -783,12 +843,19 @@ def main() -> int:
     # patch가 evidence.json에 남아 스키마 게이트가 무의미해진다 (E2E 실측에서 발견:
     # exit 2를 받고도 잘못된 claim 2건·visual_evidence 1건이 파일에 들어갔다).
     # 사본에 적용해 검증한 뒤 통과할 때만 교체한다.
-    writing = bool(args.merge or args.verdicts or args.add_frames)
+    writing = bool(args.merge or args.verdicts or args.add_frames or args.from_lines)
     if writing:
         candidate = json.loads(json.dumps(ev))
         if args.add_frames:
             names = parse_frame_lines(Path(args.add_frames).read_text(encoding="utf-8"))
             candidate = register_frames(candidate, names)
+        if args.from_lines:
+            try:
+                candidate = merge(candidate, expand_lines(
+                    Path(args.from_lines).read_text(encoding="utf-8")))
+            except ValueError as e:
+                print(f"INVALID: {e}", file=sys.stderr)
+                return 2
         if args.merge:
             candidate = merge(candidate, json.loads(Path(args.merge).read_text(encoding="utf-8")))
         if args.verdicts:
