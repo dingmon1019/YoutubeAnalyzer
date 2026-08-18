@@ -916,3 +916,64 @@ def test_audit_candidates_default_limit_is_three():
     """라운드5 이월: 구 정밀 파이프라인이 3건으로 고정했었고 solo에서도 낡은 기본값 6이 되살아나면 안 되므로 기본값이 6이면 인자 없는 호출이 조용히 6으로 회귀한다."""
     import inspect
     assert inspect.signature(evidence.audit_candidates).parameters["limit"].default == 3
+
+
+def _render_fixture():
+    return {
+        "video": {"id": "x", "title": "테스트 영상", "url": "https://youtu.be/x",
+                  "duration": 687.0, "channel": "채널"},
+        "video_type": {"primary": "tutorial", "confidence": "high", "basis": "화면 실연"},
+        "visual_evidence": [
+            {"id": "v1", "type": "ui", "value": "16.3x", "timestamp": 132.0,
+             "frame": "t0212_1024.jpg", "confidence": "high"}],
+        "claims": [
+            {"id": "c1", "claim": "속도가 빨라진다", "timestamp": 132.0,
+             "evidence": [{"source": "frame", "ref": "v1"}, {"source": "transcript", "ref": "12"}],
+             "conflict": {"transcript": "16배", "screen": "16.3x"},
+             "verification": {"status": "unaudited"}}],
+        "knowledge_items": [
+            {"id": "k1", "type": "command", "content": "pip install -U yt-dlp",
+             "timestamp": 88.0, "evidence": [{"source": "frame", "ref": "v1"}],
+             "verification": {"status": "unaudited"}},
+            {"id": "k2", "type": "concept", "content": "자막 전용 개념", "timestamp": 10.0,
+             "evidence": [{"source": "transcript", "ref": "3"}],
+             "verification": {"status": "unaudited"}}],
+        "gaps": [{"start": 350.0, "end": 469.0, "reason": "지도 공백"}],
+        "flags": [],
+    }
+
+
+def test_render_contains_required_elements():
+    """게이트 기준 4: 근거 인용·화면/자막 구분·conflict 병기·누락 후보·정직성 문구."""
+    md = evidence.render_video_md(_render_fixture(), cross_flags=1, coverage_added=2)
+    assert "# 테스트 영상" in md
+    assert "(t=01:28)" in md and "(t=02:12)" in md          # fmt_ts 인용
+    assert "화면 확인" in md and "자막 근거만" in md          # 근거 구분
+    assert "16배" in md and "16.3x" in md                    # conflict 병기
+    assert "05:50" in md and "07:49" in md and "지도 공백" in md   # gaps
+    assert "표본 감사 미실시" in md
+    assert "교차 대조" in md and "1" in md                   # 스탬프에 flag 수
+
+
+def test_render_groups_knowledge_by_priority():
+    """command가 concept보다 먼저 — AUDIT_PRIORITY 순 그룹."""
+    md = evidence.render_video_md(_render_fixture())
+    assert md.index("pip install") < md.index("자막 전용 개념")
+
+
+def test_render_cli_writes_file(tmp_path):
+    ev = _render_fixture()
+    (tmp_path / "evidence.json").write_text(
+        __import__("json").dumps(ev, ensure_ascii=False), encoding="utf-8")
+    import sys as _sys
+    evidence.save(tmp_path, ev)
+    rc = None
+    _argv = ["evidence.py", str(tmp_path), "--render", "--cross-flags", "1"]
+    old = _sys.argv; _sys.argv = _argv
+    try:
+        rc = evidence.main()
+    finally:
+        _sys.argv = old
+    assert rc == 0
+    out = (tmp_path / "video.md").read_text(encoding="utf-8")
+    assert "# 테스트 영상" in out

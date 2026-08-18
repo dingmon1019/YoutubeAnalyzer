@@ -654,6 +654,78 @@ def validate(ev: dict) -> list:
     return errs
 
 
+# ── video.md 렌더러 — "정본은 evidence.json, video.md는 그것의 렌더링"의 문자적 구현.
+# LLM이 16KB 문서를 출력하던 비용(solo 실측 output의 약 절반)을 0으로 만든다.
+# 자율 구성 대신 고정 템플릿 — 값·근거는 evidence와 바이트 단위로 동일하다.
+
+_TYPE_LABELS = {
+    "command": "명령어", "setting": "설정", "action": "조작", "criterion": "판단 기준",
+    "prerequisite": "준비조건", "warning": "주의사항", "procedure": "절차",
+    "result": "결과", "comparison": "비교", "claim": "주장", "concept": "개념",
+    "example": "예시",
+}
+
+
+def _evidence_tag(item: dict) -> str:
+    srcs = {e.get("source") for e in (item.get("evidence") or []) if isinstance(e, dict)}
+    if "frame" in srcs and "transcript" in srcs:
+        return "화면+자막"
+    if "frame" in srcs:
+        return "화면 확인"
+    return "자막 근거만"
+
+
+def _item_line(item: dict, text_key: str) -> str:
+    t = common.fmt_ts(float(item.get("timestamp", 0)))
+    line = f"- {item.get(text_key, '')} `(t={t})` [{_evidence_tag(item)}]"
+    cf = item.get("conflict")
+    if isinstance(cf, dict) and cf:
+        line += f" — ⚠️ 자막 \"{cf.get('transcript', '')}\" vs 화면 \"{cf.get('screen', '')}\" (화면 채택)"
+    return line
+
+
+def render_video_md(ev: dict, cross_flags: int = 0, coverage_added: int = 0) -> str:
+    v = ev.get("video") or {}
+    vt = ev.get("video_type") or {}
+    lines = [
+        f"# {v.get('title', '(제목 없음)')}",
+        "",
+        f"- **URL**: {v.get('url', '')}",
+        f"- **길이**: {common.fmt_ts(float(v.get('duration') or 0))} · **채널**: {v.get('channel', '')}",
+        f"- **영상 유형**: {vt.get('primary', '?')} ({vt.get('confidence', '?')}) — {vt.get('basis', '')}",
+        f"- **검증**: 교차 대조 flag {cross_flags}건 · 커버리지 보강 {coverage_added}건 · "
+        "**표본 감사 미실시 — 근거는 프레임·자막으로 추적 가능하나 독립 검증되지 않음**",
+        "",
+        "## 핵심 지식",
+        "",
+    ]
+    items = ev.get("knowledge_items") or []
+    rank = {t: i for i, t in enumerate(AUDIT_PRIORITY)}
+    for typ in sorted({i.get("type") for i in items}, key=lambda t: rank.get(t, 99)):
+        lines.append(f"### {_TYPE_LABELS.get(typ, typ)}")
+        for it in items:
+            if it.get("type") == typ:
+                lines.append(_item_line(it, "content"))
+        lines.append("")
+    claims = ev.get("claims") or []
+    if claims:
+        lines += ["## 주장·설명", ""]
+        for c in claims:
+            lines.append(_item_line(c, "claim"))
+        lines.append("")
+    lines += ["## 누락 후보", ""]
+    for g in ev.get("gaps") or []:
+        if isinstance(g, dict):
+            lines.append(f"- {common.fmt_ts(float(g.get('start', 0)))}–"
+                         f"{common.fmt_ts(float(g.get('end', 0)))} 구간 미확인 ({g.get('reason', '')})")
+    for fl in ev.get("flags") or []:
+        lines.append(f"- flag: {fl}")
+    if not (ev.get("gaps") or ev.get("flags")):
+        lines.append("- (기록된 공백 없음)")
+    lines += ["", "---", f"*evidence.json이 정본이다 — 이 문서는 `evidence.py --render`가 생성했다.*", ""]
+    return "\n".join(lines)
+
+
 def summary_line(ev: dict) -> str:
     p = ev["provenance"]
     return (f"EVIDENCE schema={ev['schema_version']} "
@@ -685,6 +757,10 @@ def main() -> int:
                     help="커버리지 감사용 지식 목록 출력 (claims + knowledge_items)")
     ap.add_argument("--cross-check", dest="cross_check", action="store_true",
                     help="해시·수치 판독이 갈린 자리 검출 (LLM 없이, 감사 후보 선정용)")
+    ap.add_argument("--render", action="store_true",
+                    help="evidence.json에서 video.md를 결정론적으로 생성")
+    ap.add_argument("--cross-flags", dest="cross_flags", type=int, default=0)
+    ap.add_argument("--coverage-added", dest="coverage_added", type=int, default=0)
     ap.add_argument("--summary", action="store_true")
     args = ap.parse_args()
 
@@ -724,6 +800,11 @@ def main() -> int:
             print(f"CROSSCHECK {f['kind']}\t{' vs '.join(f['values'])}\t{','.join(f['ids'])}")
         if not flags:
             print("CROSSCHECK none")
+    if args.render:
+        md = render_video_md(ev, args.cross_flags, args.coverage_added)
+        out = Path(cd) / "video.md"
+        out.write_text(md, encoding="utf-8", newline="\n")
+        print(f"RENDERED {out}")
     if args.summary:
         print(summary_line(ev))
     if args.digest:
