@@ -73,3 +73,26 @@ def test_one_new_value_is_not_counted_twice():
              "knowledge_items": [{"id": "k1"}]}
     r = compare.compare(before, after)
     assert r["value_mismatch"] == 1
+
+
+def test_formatting_difference_is_not_a_mismatch():
+    """실측 회귀: 같은 텍스트의 서식 차이(구분자·빈 줄)를 판독 불일치로 세면 안 된다."""
+    before = {"visual_evidence": [{"id": "v1", "value": "활용 Tip — 터미널 사운드 설정: 알람"}],
+              "knowledge_items": [{"id": "k1"}]}
+    after = {"visual_evidence": [{"id": "v1", "value": "활용 Tip / 터미널 사운드 설정 - 알람"}],
+             "knowledge_items": [{"id": "k1"}]}
+    r = compare.compare(before, after)
+    assert r["value_mismatch"] == 0
+    assert r["values_reformatted"] == 1
+    assert r["passed"] is True
+
+
+def test_real_misread_still_fails_gate():
+    """음성 회귀 가드: 영숫자가 실제로 갈린 오독은 여전히 게이트를 막는다."""
+    before = {"visual_evidence": [{"id": "v1", "value": "commit 3f4a625 base"}],
+              "knowledge_items": [{"id": "k1"}]}
+    after = {"visual_evidence": [{"id": "v1", "value": "commit 3f4a0625 base"}],
+             "knowledge_items": [{"id": "k1"}]}
+    r = compare.compare(before, after)
+    assert r["value_mismatch"] == 1
+    assert r["passed"] is False

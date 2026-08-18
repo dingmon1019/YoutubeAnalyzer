@@ -8,11 +8,14 @@
 """
 import argparse
 import json
+import re
 import sys
 from collections import Counter
 
 KNOWLEDGE_FLOOR = 0.8   # 지식 항목 유지율 하한
 WARN_DELTA_MAX = 2      # "⚠️ 화면 확인 필요" 증가 허용치
+
+_ALNUM = re.compile(r"[^0-9A-Za-z가-힣]+")
 
 
 def _utf8_stdout() -> None:
@@ -46,21 +49,34 @@ def _looks_like_same_value(a: str, b: str) -> bool:
     return a != b and abs(len(a) - len(b)) <= 2 and (a[:6] == b[:6] or a[-6:] == b[-6:])
 
 
+def _semantic_key(s: str) -> str:
+    """서식(공백·개행·구분자)을 걷어낸 비교용 정규형. 값 오독은 영숫자가 달라지는 것이고,
+    같은 텍스트를 다르게 직렬화한 것(`—` vs `/`, 빈 줄 유무)은 오독이 아니다.
+    실측(2026-08-18): 게이트 FAIL 3건이 전부 이 서식 차이였다."""
+    return _ALNUM.sub("", s).lower()
+
+
 def compare(before: dict, after: dict) -> dict:
     """값 불일치·지식 유지율·경고 증가를 계산하고 게이트 통과 여부를 판정한다.
 
     값 불일치는 "개선 전 값이 사라졌는데 판독이 갈린 것으로 보이는 값이 새로 생긴" 경우다.
-    매칭된 새 값은 소비해 하나가 여러 건으로 중복 계상되지 않게 한다. 통째로 사라진 값은
+    근접 매칭(near-miss) 쌍이라도 영숫자·한글만 남긴 정규형이 같으면 서식 차이일 뿐
+    판독 오류가 아니므로 values_reformatted로 따로 센다(게이트 미대상). 매칭된 새 값은
+    두 경우 모두 소비해 하나가 여러 건으로 중복 계상되지 않게 한다. 통째로 사라진 값은
     불일치가 아니라 values_lost로 따로 센다 — 프레임 축소로 인한 예상된 감소와 판독 오류를
     섞으면 게이트가 무엇을 잡았는지 알 수 없다."""
     bc, ac = Counter(_values(before)), Counter(_values(after))
     lost = list((bc - ac).elements())
     pool = list((ac - bc).elements())
     mismatch = 0
+    reformatted = 0
     for l in lost:
         for i, g in enumerate(pool):
             if _looks_like_same_value(l, g):
-                mismatch += 1
+                if _semantic_key(l) == _semantic_key(g):
+                    reformatted += 1
+                else:
+                    mismatch += 1
                 pool.pop(i)
                 break
     kb = len(before.get("knowledge_items") or [])
@@ -69,8 +85,9 @@ def compare(before: dict, after: dict) -> dict:
     warn_delta = _warn_count(after) - _warn_count(before)
     return {
         "value_mismatch": mismatch,
+        "values_reformatted": reformatted,
         "values_before": len(list(bc.elements())), "values_after": len(list(ac.elements())),
-        "values_lost": len(lost) - mismatch,
+        "values_lost": len(lost) - mismatch - reformatted,
         "knowledge_before": kb, "knowledge_after": ka, "knowledge_ratio": ratio,
         "warn_delta": warn_delta,
         "passed": mismatch == 0 and ratio >= KNOWLEDGE_FLOOR and warn_delta <= WARN_DELTA_MAX,
@@ -90,6 +107,7 @@ def main() -> int:
     r = compare(before, after)
     print(f"값 항목      {r['values_before']} → {r['values_after']}")
     print(f"값 불일치    {r['value_mismatch']}건  (게이트: 0)")
+    print(f"서식 차이    {r['values_reformatted']}건  (참고용, 게이트 아님)")
     print(f"값 소실      {r['values_lost']}건  (참고용, 게이트 아님)")
     print(f"지식 항목    {r['knowledge_before']} → {r['knowledge_after']}  "
           f"유지율 {r['knowledge_ratio']:.0%}  (게이트: {KNOWLEDGE_FLOOR:.0%})")
