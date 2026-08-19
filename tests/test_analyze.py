@@ -18,7 +18,7 @@ SIG = {
 
 def test_allocate_count_formula():
     ts = analyze.allocate_map_budget(1800.0, SIG)   # 30분
-    assert len(ts) == 16
+    assert len(ts) == 20  # 캡 16→28 갱신(2026-08-19): raw n=21, SIG 후보 충돌로 실채택 20
 
 
 def test_allocate_includes_chapter_starts_and_ends():
@@ -55,7 +55,7 @@ def test_allocate_short_video_respects_invariants():
 
 def test_allocate_normal_duration_unchanged():
     ts = analyze.allocate_map_budget(1800.0, SIG)
-    assert len(ts) == 16
+    assert len(ts) == 20  # 캡 16→28 갱신(2026-08-19): raw n=21, SIG 후보 충돌로 실채택 20
     assert any(abs(t - 1.0) < 0.5 for t in ts) and any(abs(t - 1798.0) < 1 for t in ts)
 
 
@@ -74,6 +74,16 @@ RICH_SIG = {
 CLUSTERED_SIG = {
     "chapters": [], "heatmap": [], "sponsorblock": [],
     "activity": {"curve": [], "peaks": [15, 87, 140, 151, 178, 231, 267]},
+}
+
+# 순수 그리드 전용 — 챕터/히트맵/스폰서블록이 전혀 없어 앵커·제외구간과의 우연한 근접충돌이
+# 없다. 분량 비례 캡(TestMapBudgetScalesForLongVideos)은 "duration -> n" 공식 자체를 검증하는
+# 것이 목적이라 SIG(챕터·스폰서블록 포함)를 쓰면 후보 소진으로 실채택 수가 공식값보다 줄어들
+# 수 있다(실측: SIG로 1942초 호출 시 23이 아니라 22 — 스폰서블록 100~160s 구간이 그리드 후보
+# 1개를 통째로 삼킴). EMPTY_SIG는 그 혼입을 없애 공식값이 그대로 채택 수가 되게 한다.
+EMPTY_SIG = {
+    "chapters": [], "heatmap": [], "sponsorblock": [],
+    "activity": {"curve": [], "peaks": []},
 }
 
 
@@ -202,9 +212,10 @@ def test_allocate_extra_never_exceeds_spec_ceiling():
         "chapters": [], "heatmap": [], "sponsorblock": [],
         "activity": {"curve": [], "peaks": list(range(5, 2000, 3))},
     }
-    assert len(analyze.allocate_map_budget(2000.0, dense)) == 16  # 전제조건: n=16(상한)
+    # 캡 16→28 갱신(2026-08-19): n=round(2000/60*0.7)=23(신 캡 28 미만, 자연값)
+    assert len(analyze.allocate_map_budget(2000.0, dense)) == 23  # 전제조건
     for extra in (0, 1, 10, 100, 1000):
-        assert len(analyze.allocate_map_budget(2000.0, dense, extra=extra)) <= 16
+        assert len(analyze.allocate_map_budget(2000.0, dense, extra=extra)) <= 28
 
 
 def test_extract_map_frames_caps_target_at_40_for_long_video(monkeypatch, tmp_path):
@@ -216,7 +227,8 @@ def test_extract_map_frames_caps_target_at_40_for_long_video(monkeypatch, tmp_pa
         "chapters": [], "heatmap": [], "sponsorblock": [],
         "activity": {"curve": [], "peaks": list(range(5, 2000, 3))},
     }
-    assert len(analyze.allocate_map_budget(duration, dense)) == 16  # 전제조건
+    # 캡 16→28 갱신(2026-08-19): n=round(2000/60*0.7)=23(신 캡 28 미만, 자연값)
+    assert len(analyze.allocate_map_budget(duration, dense)) == 23  # 전제조건
 
     requested_counts = []
 
@@ -232,7 +244,7 @@ def test_extract_map_frames_caps_target_at_40_for_long_video(monkeypatch, tmp_pa
     monkeypatch.setattr(analyze.frames, "dedup_frames", fake_dedup)
 
     kept, dropped = analyze.extract_map_frames(Path("video.mp4"), duration, dense, tmp_path)
-    assert all(c <= 16 for c in requested_counts)   # 어떤 라운드도 16장 초과 요청 안 함
+    assert all(c <= 28 for c in requested_counts)   # 어떤 라운드도 28장 초과 요청 안 함
     assert len(kept) == 5                            # best-so-far — 상한에 막혀 더는 못 늘어남
 
 
@@ -491,9 +503,30 @@ def test_main_timeout_reports_plain_text(monkeypatch, capsys):
 
 
 def test_map_budget_solo_scale():
-    """solo 모드 예산: 11:27(687s) 영상이 8장, 30분 영상이 16장 캡에 걸린다 (스펙 §4)."""
+    """solo 모드 예산: 11:27(687s) 영상이 8장 그대로, 30분 영상은 캡 16→28 갱신(2026-08-19)
+    이후 신 캡(28) 미만인 자연값으로 나온다 (스펙 §4)."""
     assert len(analyze.allocate_map_budget(687.0, SIG)) <= 8 + 2   # 앵커 2장 여유
-    n_11m = min(16, max(6, round(687.0 / 60 * 0.7)))
+    n_11m = min(28, max(6, round(687.0 / 60 * 0.7)))
     assert n_11m == 8
     ts_30m = analyze.allocate_map_budget(1800.0, SIG)
-    assert len(ts_30m) <= 16
+    assert len(ts_30m) <= 28
+
+
+class TestMapBudgetScalesForLongVideos:
+    # 실측(2026-08-19, 32:22 영상): 고정 캡 16이 지도 밀도를 0.5장/분으로 깎아 G 15구간 발생
+    # EMPTY_SIG 사용 이유: SIG는 스폰서블록/챕터가 있어 후보 충돌로 채택 수가 공식값보다
+    # 줄 수 있다(순수 공식 검증이 목적이므로 그 혼입을 제거한다. 위 EMPTY_SIG 정의 참고).
+    def test_32min_scales(self):
+        # 1942초(32:22) → round(32.37*0.7)=23장 (구 캡 16 초과)
+        ts = analyze.allocate_map_budget(1942.0, EMPTY_SIG)
+        assert len(ts) == 23
+
+    def test_60min_caps_at_28(self):
+        # 3600초 → round(42)=42 → 캡 28
+        ts = analyze.allocate_map_budget(3600.0, EMPTY_SIG)
+        assert len(ts) == 28
+
+    def test_11min_unchanged(self):
+        # 687초(11:27) → 8장 — 짧은 영상 회귀 금지
+        ts = analyze.allocate_map_budget(687.0, EMPTY_SIG)
+        assert len(ts) == 8
