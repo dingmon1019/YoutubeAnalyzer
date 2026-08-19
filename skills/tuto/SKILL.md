@@ -38,7 +38,7 @@ NOTE(yt-dlp 최신성·JS 런타임 부재)는 사용자에게 한 줄 알린다
 확인한다(경로·목록 파악용 — 프레임 파일은 열지 않는다). 자막 없음이면 사용자에게 알리고
 프레임 중심 진행, 30분 초과 WARNING이면 구간 지정을 제안한다.
 
-**2. 비전① (Agent, `model: "sonnet"`).** 디스패치 프롬프트는 경로만 나른다:
+**2. 비전① (Agent, `model: "haiku"`).** 디스패치 프롬프트는 경로만 나른다:
 "`<PROMPTS>/transcribe.md`를 Read하고 그대로 수행. 모드=지도. 프레임: <FRAMES 목록>.
 자막: <cache_dir>/pass1-report.txt. 출력: <cache_dir>/vision-map.lines".
 에이전트의 최종 응답 `프레임 N, V라인 M | Z: MM:SS@1024,...`에서 Z 목록을 얻는다 —
@@ -49,7 +49,7 @@ NOTE(yt-dlp 최신성·JS 런타임 부재)는 사용자에게 한 줄 알린다
 `<cache_dir>/zoom-out.txt`로 저장하고 `evidence.py "<cache_dir>" --add-frames ...`까지
 `&&` 한 호출로. 새 프레임도 너는 Read하지 않는다.
 
-**4. 비전② (sonnet).** 같은 프롬프트 파일, 모드=확대. 프레임 목록 대신
+**4. 비전② (haiku).** 같은 프롬프트 파일, 모드=확대. 프레임 목록 대신
 `<cache_dir>/zoom-out.txt` 경로를 준다. 출력=`<cache_dir>/vision-zoom.lines`.
 
 **5. 합성 (Agent, `model: "sonnet"`).** "`<PROMPTS>/synthesize.md`를 Read하고 수행.
