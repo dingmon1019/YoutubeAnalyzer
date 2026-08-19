@@ -1164,6 +1164,39 @@ class TestRenderChapters:
         md = evidence.render_video_md(EV_WITH_TWO_ITEMS, chapters=self.CHAPTERS)
         assert "- [" in md  # 예: "- [명령어] pip install ..."
 
+    def test_chapter_items_sorted_by_timestamp_ascending(self):
+        """리뷰 F4② 발견: 챕터 절 내부 항목이 삽입 순서로 나와 04:15→04:40→04:28처럼
+        뒤섞이는 버그가 있었다 — timestamp 오름차순으로 정렬돼야 한다."""
+        ev = json.loads(json.dumps(EV_WITH_TWO_ITEMS))
+        ev["knowledge_items"] = [
+            {"id": "k1", "type": "command", "content": "A항목", "timestamp": 255.0,
+             "evidence": [], "verification": {"status": "unaudited"}},
+            {"id": "k2", "type": "command", "content": "B항목", "timestamp": 280.0,
+             "evidence": [], "verification": {"status": "unaudited"}},
+            {"id": "k3", "type": "command", "content": "C항목", "timestamp": 268.0,
+             "evidence": [], "verification": {"status": "unaudited"}},
+        ]
+        chapters = self.CHAPTERS + [{"start_time": 180, "end_time": 300, "title": "구간"}]
+        md = evidence.render_video_md(ev, chapters=chapters)
+        assert md.index("A항목") < md.index("C항목") < md.index("B항목")
+
+    def test_non_dict_chapter_element_is_skipped_not_fatal(self):
+        """리뷰 F4① 가드: chapters 원소 중 dict가 아닌 것이 섞여도(예: info.json 오염)
+        그 원소만 건너뛰고 나머지 유효한 챕터로 렌더를 완주한다."""
+        bad_chapters = [None, *self.CHAPTERS]
+        md = evidence.render_video_md(EV_WITH_TWO_ITEMS, chapters=bad_chapters)
+        assert "### [01:00] 설치" in md and "### [02:00] 실행" in md
+
+    def test_short_video_still_gets_chapter_layout(self):
+        """컨트롤러 재정(F3): 챕터 레이아웃 개선은 영상 길이와 무관한 의도된 동작이다 —
+        짧은 영상(300초 수준, 챕터 3개)도 chapters가 주어지면 예외 없이 챕터 절로
+        렌더되고 검증 스탬프·"표본 감사 미실시"가 보존된다."""
+        ev = json.loads(json.dumps(EV_WITH_TWO_ITEMS))
+        ev["video"]["duration"] = 300.0
+        md = evidence.render_video_md(ev, chapters=self.CHAPTERS)
+        assert "### [01:00] 설치" in md and "### [02:00] 실행" in md
+        assert "표본 감사 미실시" in md
+
 
 def test_render_cli_reads_chapters_from_info_json(tmp_path):
     """--render는 <cache_dir>/info.json의 chapters 키를 읽어 절을 구성한다."""

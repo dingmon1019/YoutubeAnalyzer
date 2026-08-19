@@ -23,9 +23,14 @@ def allocate_map_budget(duration: float, sig: dict, extra: int = 0) -> list:
     if duration <= 0:
         return []
     # solo 모드(스펙 2026-08-18 §4): 지도는 확대 판정용 개요다 — 값 판독은 확대가 담당하므로
-    # 밀도를 절반으로 줄인다. 11:27 영상 기준 14 → 8장, 30분 캡 40 → 16장.
-    n = min(28, max(6, round(duration / 60 * 0.7)))
-    target = min(28, n + max(0, extra))            # 상한 28은 extra 보강에도 재적용 (분량 비례 라운드)
+    # 밀도를 절반으로 줄인다. 20분(1200s) 이하는 분당 0.7장(11:27 영상 기준 8장 — 회귀
+    # 기준선, 불변). 리뷰 F1(2026-08-19): 캡만 28→34로 올려선 긴 영상의 지도 공백이 안
+    # 줄어(32:22 실측 G 15구간) 20분 초과 구간은 분당 1.0장으로 올린다 — 20:00/20:01
+    # 경계에서 14→20장으로 불연속 점프하는 것은 의도된 동작(경계 테스트로 고정).
+    # 상한은 34장(60분 영상 기준 round(60)=60 → 캡 도달).
+    rate = 0.7 if duration <= 1200 else 1.0
+    n = min(34, max(6, round(duration / 60 * rate)))
+    target = min(34, n + max(0, extra))            # 상한 34는 extra 보강에도 재적용 (분량 비례 라운드)
     min_gap = max(8.0, duration / n / 2)
     sb = sig.get("sponsorblock", [])
     cands = []                                     # (weight, t)
@@ -76,9 +81,10 @@ def extract_map_frames(video_path: Path, duration: float, sig: dict, out_dir: Pa
     포함한다는 보장이 없다 — 오히려 그리드가 촘촘해질수록 인접 후보가 시각적으로 더 비슷해져
     dedup에서 더 많이 깎일 수 있다(실측: EMPTY_SIG에서 extra=1 시 상위집합 불성립 확인). 그래서
     라운드마다 kept 개수를 비교해 **최댓값(best-so-far)** 만 유지한다 — 나중 라운드가 더
-    나쁘면 그 결과는 버리고 이전 best를 반환한다. target은 allocate_map_budget 쪽에서 40으로
-    상한(§3.3 예산 상한)이 걸려 있어, extra가 아무리 커져도 그리드 재생성 결과가 결국
-    수렴하고(더 못 늘어나면 grown이 성장을 멈춰) 루프가 유한 회 안에 종료된다."""
+    나쁘면 그 결과는 버리고 이전 best를 반환한다. target은 allocate_map_budget 쪽에서 34로
+    상한(§3.3 예산 상한, 리뷰 F1로 28→34 갱신)이 걸려 있어, extra가 아무리 커져도 그리드
+    재생성 결과가 결국 수렴하고(더 못 늘어나면 grown이 성장을 멈춰) 루프가 유한 회 안에
+    종료된다."""
     ts = allocate_map_budget(duration, sig)
     target = len(ts)
     best_kept, best_dropped = [], 0
@@ -93,7 +99,7 @@ def extract_map_frames(video_path: Path, duration: float, sig: dict, out_dir: Pa
         extra += max(1, target - len(best_kept))
         grown = allocate_map_budget(duration, sig, extra=extra)
         if len(grown) <= len(ts):
-            break                                    # 후보 풀 소진(또는 40 상한 도달) — 더 보강 불가
+            break                                    # 후보 풀 소진(또는 34 상한 도달) — 더 보강 불가
         ts = grown
     return best_kept, best_dropped
 

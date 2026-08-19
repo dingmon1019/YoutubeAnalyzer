@@ -138,3 +138,20 @@ class TestProportionalBudgetContract:
     def test_knowledge_cap_scales(self):
         assert "최대 30건" in SYNTHESIZE   # 기존 계약 유지
         assert "분당" in SYNTHESIZE        # 비례 조항
+
+
+class TestZoomLeverContract:
+    # 리뷰 F2(2026-08-19): "확대 레버"가 문구상 상한만 올라가고 실제 선택 기준은 그대로면
+    # 레버가 작동하지 않는다 — 항목별 개수도 20분 초과 시 함께 올라가야 하고
+    # (6곳+2곳=상한 6~8곳과 합이 맞는다), 판정 근거가 명시돼야 한다.
+    def test_density_pick_count_scales(self):
+        assert "상위 3~4곳(영상 20분 초과면 6곳)" in TRANSCRIBE
+
+    def test_gap_pick_count_scales(self):
+        assert "구간 1곳(초과면 2곳)" in TRANSCRIBE
+
+    def test_transcribe_states_duration_basis(self):
+        assert "STATUS duration=" in TRANSCRIBE
+
+    def test_synthesize_states_duration_basis(self):
+        assert "STATUS duration=" in SYNTHESIZE

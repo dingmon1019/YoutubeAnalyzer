@@ -798,6 +798,8 @@ def _chapter_index(raw_ts, chapters: list):
     except (TypeError, ValueError):
         return None
     for i, ch in enumerate(chapters):
+        if not isinstance(ch, dict):
+            continue
         try:
             start, end = float(ch.get("start_time")), float(ch.get("end_time"))
         except (TypeError, ValueError):
@@ -811,6 +813,9 @@ def _render_chapter_sections(items: list, claims: list, chapters: list) -> list:
     """"## 챕터별 지식" — 챕터를 시간순으로 돌며 knowledge_items·claims를 절에 흡수한다.
     빈 챕터는 절을 만들지 않고, 범위 밖·timestamp 없는 항목은 "### 기타"로 모은다.
     claims를 절에 흡수하므로 별도 "## 주장·설명" 절은 만들지 않는다."""
+    # 리뷰 F4① 가드: chapters 원소 중 dict가 아닌 것이 섞여 있어도(예: info.json 파싱
+    # 오염) 그 원소만 건너뛰고 나머지 유효한 챕터로 계속 렌더한다 — 전체 실패 금지.
+    chapters = [c for c in chapters if isinstance(c, dict)]
     lines = ["## 챕터별 지식", ""]
     entries = [(it, "content", it.get("type")) for it in items]
     entries += [(c, "claim", "claim") for c in claims]
@@ -821,7 +826,9 @@ def _render_chapter_sections(items: list, claims: list, chapters: list) -> list:
         (buckets[idx] if idx is not None else misc).append((it, text_key, typ))
     order = sorted(range(len(chapters)), key=lambda i: _safe_ts(chapters[i].get("start_time")))
     for i in order:
-        bucket = buckets[i]
+        # 리뷰 F4② 가드: 항목을 등장 순서가 아니라 timestamp 오름차순으로 정렬한다 —
+        # 실측(2026-08-19): [03:00] 절이 04:15→04:40→04:28 순서로 나오는 버그가 있었다.
+        bucket = sorted(buckets[i], key=lambda e: _safe_ts(e[0].get("timestamp")))
         if not bucket:
             continue
         ch = chapters[i]
@@ -831,7 +838,7 @@ def _render_chapter_sections(items: list, claims: list, chapters: list) -> list:
         lines.append("")
     if misc:
         lines.append("### 기타")
-        for it, text_key, typ in misc:
+        for it, text_key, typ in sorted(misc, key=lambda e: _safe_ts(e[0].get("timestamp"))):
             lines.append(_tagged_item_line(it, text_key, typ))
         lines.append("")
     return lines
