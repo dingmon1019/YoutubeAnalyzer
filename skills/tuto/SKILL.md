@@ -69,7 +69,7 @@ transcribe.md 재확인 모드로 `<cache_dir>/evidence.json` 경로와 flag의 
 뿐 기존 K/C의 오독 값은 그대로 남는다 — 갈린 값은 video.md에 flag 건수로만 드러나며
 정본 판정은 정정 V가 담당한다.
 
-**7. 커버리지 감사 (haiku).**
+**7. 커버리지 감사 (Agent, `model: "haiku"`).**
 `evidence.py "<cache_dir>" --coverage-input > "<cache_dir>/coverage-digest.txt"` 후
 디스패치: "이미지 Read 금지. <digest 경로>와 <pass1-report.txt 경로>를 Read하고, 이
 영상을 안 본 에이전트가 작업하려면 알아야 하는데 digest에 없는 지식을 자막으로 검증해
