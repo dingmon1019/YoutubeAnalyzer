@@ -109,8 +109,11 @@ class TestOrchestratorContract:
         # vision-*.lines 직접 merge 금지 — id_offset 함정
         assert "vision" in TEXT and "patch.lines" in TEXT
 
-    def test_haiku_vision_sonnet_synthesis(self):
-        assert '"haiku"' in TEXT and '"sonnet"' in TEXT
+    def test_haiku_agents(self):
+        # 3레버 라운드(2026-08-19)에서 합성도 haiku로 강등 — sonnet 단언은
+        # test_haiku_vision_sonnet_synthesis에서 개명·갱신됨 (게이트 실측 레버)
+        assert '"haiku"' in TEXT
+        assert '"sonnet"' not in TEXT  # 파이프라인에 sonnet 디스패치가 없어야 한다
 
     def test_call_budget_present(self):
         assert "12콜" in TEXT

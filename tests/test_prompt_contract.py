@@ -108,3 +108,9 @@ class TestTranscriptOnlyValueContract:
     def test_transcript_only_values_get_warning(self):
         assert "자막에서만 나온 구체값" in SYNTHESIZE
         assert "⚠️ 화면 확인 필요" in SYNTHESIZE
+
+
+class TestExtractionCapContract:
+    # 3레버 라운드(2026-08-19): 상한 없는 추출이 절감분을 소비하는 회귀 차단
+    def test_knowledge_cap_present(self):
+        assert "최대 30건" in SYNTHESIZE
