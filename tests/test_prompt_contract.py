@@ -114,3 +114,9 @@ class TestExtractionCapContract:
     # 3레버 라운드(2026-08-19): 상한 없는 추출이 절감분을 소비하는 회귀 차단
     def test_knowledge_cap_present(self):
         assert "최대 30건" in SYNTHESIZE
+
+
+class TestNoAutocorrectContract:
+    # 실측(2026-08-19): haiku 비전이 축약 명령 키를 온전한 단어로 펴 읽어 4회 연속 오독
+    def test_no_abbreviation_expansion(self):
+        assert "축약어를 펴지 마라" in TRANSCRIBE
