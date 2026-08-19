@@ -52,7 +52,7 @@ NOTE(yt-dlp 최신성·JS 런타임 부재)는 사용자에게 한 줄 알린다
 **4. 비전② (haiku).** 같은 프롬프트 파일, 모드=확대. 프레임 목록 대신
 `<cache_dir>/zoom-out.txt` 경로를 준다. 출력=`<cache_dir>/vision-zoom.lines`.
 
-**5. 합성 (Agent, `model: "haiku"`).** "`<PROMPTS>/synthesize.md`를 Read하고 수행.
+**5. 합성 (Agent, `model: "sonnet"`).** "`<PROMPTS>/synthesize.md`를 Read하고 수행.
 입력: pass1-report.txt, vision-map.lines, vision-zoom.lines. 출력:
 <cache_dir>/patch.lines". V 전부 복사 + K/C/G — 단일 배치가 계약이다. 최종 응답
 `T=<영상유형>, K n건, C n건, V 복사 m건, ⚠️ k건`에서 9단계 보고용 수치를 얻는다.
