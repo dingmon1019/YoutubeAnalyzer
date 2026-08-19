@@ -916,3 +916,190 @@ def test_audit_candidates_default_limit_is_three():
     """라운드5 이월: 구 정밀 파이프라인이 3건으로 고정했었고 solo에서도 낡은 기본값 6이 되살아나면 안 되므로 기본값이 6이면 인자 없는 호출이 조용히 6으로 회귀한다."""
     import inspect
     assert inspect.signature(evidence.audit_candidates).parameters["limit"].default == 3
+
+
+def _render_fixture():
+    return {
+        "video": {"id": "x", "title": "테스트 영상", "url": "https://youtu.be/x",
+                  "duration": 687.0, "channel": "채널"},
+        "video_type": {"primary": "tutorial", "confidence": "high", "basis": "화면 실연"},
+        "visual_evidence": [
+            {"id": "v1", "type": "ui", "value": "16.3x", "timestamp": 132.0,
+             "frame": "t0212_1024.jpg", "confidence": "high"}],
+        "claims": [
+            {"id": "c1", "claim": "속도가 빨라진다", "timestamp": 132.0,
+             "evidence": [{"source": "frame", "ref": "v1"}, {"source": "transcript", "ref": "12"}],
+             "conflict": {"transcript": "16배", "screen": "16.3x"},
+             "verification": {"status": "unaudited"}}],
+        "knowledge_items": [
+            {"id": "k1", "type": "command", "content": "pip install -U yt-dlp",
+             "timestamp": 88.0, "evidence": [{"source": "frame", "ref": "v1"}],
+             "verification": {"status": "unaudited"}},
+            {"id": "k2", "type": "concept", "content": "자막 전용 개념", "timestamp": 10.0,
+             "evidence": [{"source": "transcript", "ref": "3"}],
+             "verification": {"status": "unaudited"}}],
+        "gaps": [{"start": 350.0, "end": 469.0, "reason": "지도 공백"}],
+        "flags": [],
+    }
+
+
+def test_render_contains_required_elements():
+    """게이트 기준 4: 근거 인용·화면/자막 구분·conflict 병기·누락 후보·정직성 문구."""
+    md = evidence.render_video_md(_render_fixture(), cross_flags=1, coverage_added=2)
+    assert "# 테스트 영상" in md
+    assert "(t=01:28)" in md and "(t=02:12)" in md          # fmt_ts 인용
+    assert "화면 확인" in md and "자막 근거만" in md          # 근거 구분
+    assert "16배" in md and "16.3x" in md                    # conflict 병기
+    assert "05:50" in md and "07:49" in md and "지도 공백" in md   # gaps
+    assert "표본 감사 미실시" in md
+    assert "교차 대조" in md and "1" in md                   # 스탬프에 flag 수
+
+
+def test_render_groups_knowledge_by_priority():
+    """command가 concept보다 먼저 — AUDIT_PRIORITY 순 그룹."""
+    md = evidence.render_video_md(_render_fixture())
+    assert md.index("pip install") < md.index("자막 전용 개념")
+
+
+def test_render_cli_writes_file(tmp_path):
+    ev = _render_fixture()
+    (tmp_path / "evidence.json").write_text(
+        __import__("json").dumps(ev, ensure_ascii=False), encoding="utf-8")
+    import sys as _sys
+    evidence.save(tmp_path, ev)
+    rc = None
+    _argv = ["evidence.py", str(tmp_path), "--render", "--cross-flags", "1"]
+    old = _sys.argv; _sys.argv = _argv
+    try:
+        rc = evidence.main()
+    finally:
+        _sys.argv = old
+    assert rc == 0
+    out = (tmp_path / "video.md").read_text(encoding="utf-8")
+    assert "# 테스트 영상" in out
+
+
+def test_render_survives_null_timestamps():
+    """--render는 저장된 evidence에 단독 실행된다 — null timestamp가 traceback을 내면
+    fail-loud 관례(사용자 노출 traceback 금지) 위반이다."""
+    ev = _render_fixture()
+    ev["knowledge_items"][0]["timestamp"] = None
+    ev["gaps"][0]["start"] = None
+    ev["video"]["duration"] = "abc"
+    md = evidence.render_video_md(ev)
+    assert "(t=00:00)" in md          # null → 0으로 강등, 크래시 없음
+    assert "# 테스트 영상" in md
+
+
+# ── --from-lines 컴팩트 patch 확장기 ────────────────────────────────────────
+
+_LINES = (
+    "T\ttutorial\thigh\t화면 실연\n"
+    "V\tui\t132.0\tt0212_1024.jpg\thigh\t16.3x 표시\n"
+    "K\tcommand\t88.0\tv1;t12\tpip install -U yt-dlp\n"
+    "C\t132.0\tv1;t12\t속도가 빨라진다\tconflict=16배=>16.3x\n"
+    "G\t350.0\t469.0\t지도 공백\n"
+)
+
+
+def test_expand_lines_builds_full_patch():
+    p = evidence.expand_lines(_LINES)
+    assert p["video_type"] == {"primary": "tutorial", "confidence": "high", "basis": "화면 실연"}
+    ve = p["visual_evidence"][0]
+    assert ve["id"] == "v1" and ve["timestamp"] == 132.0 and ve["frame"] == "t0212_1024.jpg"
+    k = p["knowledge_items"][0]
+    assert k["evidence"] == [{"source": "frame", "ref": "v1"}, {"source": "transcript", "ref": "12"}]
+    c = p["claims"][0]
+    assert c["conflict"] == {"transcript": "16배", "screen": "16.3x"}
+    assert c["verification"] == {"status": "unaudited"}
+    assert p["gaps"] == [{"start": 350.0, "end": 469.0, "reason": "지도 공백"}]
+
+
+def test_expand_lines_rejects_unknown_record():
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        evidence.expand_lines("X\t뭔가\n")
+
+
+def test_expand_lines_merge_equivalence(tmp_path):
+    """확장 결과가 손으로 쓴 JSON patch와 동일한 merge 결과를 내야 한다 (기준점 2)."""
+    import json as _json
+    base = {"schema_version": "0.3", "video": {"id": "x", "duration": 687.0},
+            "video_type": {}, "provenance": {"frames": {"map": [
+                {"file": "t0212_1024.jpg", "t": 132.0}], "zoom": []}, "transcript": {}},
+            "segments": [{"start": float(i), "text": f"s{i}"} for i in range(20)],
+            "visual_evidence": [], "claims": [], "knowledge_items": [], "gaps": [], "flags": []}
+    evidence.save(tmp_path, _json.loads(_json.dumps(base)))
+    merged_a = evidence.merge(_json.loads(_json.dumps(base)), evidence.expand_lines(_LINES))
+    json_patch = {
+        "video_type": {"primary": "tutorial", "confidence": "high", "basis": "화면 실연"},
+        "visual_evidence": [{"id": "v1", "type": "ui", "value": "16.3x 표시",
+                             "timestamp": 132.0, "frame": "t0212_1024.jpg", "confidence": "high"}],
+        "knowledge_items": [{"type": "command", "content": "pip install -U yt-dlp", "timestamp": 88.0,
+                             "evidence": [{"source": "frame", "ref": "v1"},
+                                          {"source": "transcript", "ref": "12"}]}],
+        "claims": [{"claim": "속도가 빨라진다", "timestamp": 132.0,
+                    "evidence": [{"source": "frame", "ref": "v1"},
+                                 {"source": "transcript", "ref": "12"}],
+                    "conflict": {"transcript": "16배", "screen": "16.3x"},
+                    "verification": {"status": "unaudited"}}],
+        "gaps": [{"start": 350.0, "end": 469.0, "reason": "지도 공백"}]}
+    merged_b = evidence.merge(_json.loads(_json.dumps(base)), json_patch)
+    for key in ("visual_evidence", "claims", "knowledge_items", "gaps"):
+        assert merged_a[key] == merged_b[key], key
+
+
+def test_expand_lines_offsets_ids_on_reinvocation():
+    """재호출 시 기존 v-id와 충돌하면 안 된다 — refs도 함께 재매핑된다."""
+    lines = "V\tui\t10.0\tf.jpg\thigh\t값A\nK\tcommand\t10.0\tv1\t명령"
+    p = evidence.expand_lines(lines, id_offset=3)
+    assert p["visual_evidence"][0]["id"] == "v4"
+    assert p["knowledge_items"][0]["evidence"] == [{"source": "frame", "ref": "v4"}]
+
+
+def test_validate_rejects_duplicate_visual_ids():
+    ev = {"schema_version": "0.3", "video": {}, "video_type": {},
+          "provenance": {"frames": {"map": [], "zoom": []}, "transcript": {}},
+          "segments": [], "claims": [], "knowledge_items": [], "gaps": [], "flags": [],
+          "visual_evidence": [
+              {"id": "v1", "value": "a", "timestamp": 1.0},
+              {"id": "v1", "value": "b", "timestamp": 2.0}]}
+    errs = evidence.validate(ev)
+    assert any("중복" in e for e in errs)
+
+
+def test_expand_lines_unknown_record_includes_line_number():
+    """행 번호 없는 에러는 'INVALID 보고 1회 수정' 왕복을 성립시키지 못한다."""
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match=r"2행"):
+        evidence.expand_lines("V\tui\t1.0\tf.jpg\thigh\tok\nX\t뭔가")
+
+
+def test_expand_lines_multi_v_sequential_ids_with_nonempty_base(tmp_path):
+    """다건 V 순차 부여 + 비어 있지 않은 base 병합 — Critical 1이 터지던 정확한 지점."""
+    import json as _json
+    base = {"schema_version": "0.3", "video": {"id": "x", "duration": 10.0}, "video_type": {},
+            "provenance": {"frames": {"map": [{"file": "f.jpg", "t": 1.0}], "zoom": []},
+                           "transcript": {}},
+            "segments": [{"start": 0.0, "text": "s"}],
+            "visual_evidence": [{"id": "v1", "value": "기존", "timestamp": 1.0, "frame": "f.jpg"}],
+            "claims": [], "knowledge_items": [], "gaps": [], "flags": []}
+    lines = ("V\tui\t2.0\tf.jpg\thigh\t새값1\n"
+             "V\tui\t3.0\tf.jpg\thigh\t새값2\n"
+             "K\tcommand\t2.0\tv1;v2\t두 프레임 참조 명령")
+    p = evidence.expand_lines(lines, id_offset=1)
+    merged = evidence.merge(_json.loads(_json.dumps(base)), p)
+    ids = [v["id"] for v in merged["visual_evidence"]]
+    assert ids == ["v1", "v2", "v3"] and len(set(ids)) == 3
+    assert merged["knowledge_items"][0]["evidence"][0]["ref"] == "v2"
+    assert evidence.validate(merged) == [] or not any("중복" in e for e in evidence.validate(merged))
+
+
+def test_render_includes_transcript_source():
+    """렌더 문서에 자막 출처가 있어야 자막 전용 주장의 신뢰 수준을 판단할 수 있다."""
+    ev = {"video": {"title": "t", "duration": 10.0}, "video_type": {},
+          "provenance": {"transcript": {"source": "captions", "lang": "ko"}},
+          "visual_evidence": [], "claims": [], "knowledge_items": [], "gaps": [], "flags": []}
+    md = evidence.render_video_md(ev, note="커버리지 감사 생략 — 자막 없음")
+    assert "자막 출처" in md and "captions" in md
+    assert "커버리지 감사 생략" in md

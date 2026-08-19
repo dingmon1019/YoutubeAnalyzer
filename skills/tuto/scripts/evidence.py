@@ -426,6 +426,73 @@ def _next_id(items: list, prefix: str) -> str:
     return f"{prefix}{len(items) + 1}"
 
 
+# ── 컴팩트 patch 라인 확장기 — LLM이 JSON 보일러플레이트(따옴표·중괄호·필드명)를
+# 출력하던 토큰을 30~40% 줄인다. 확장 결과는 기존 merge/validate 게이트를 그대로 탄다.
+
+def _parse_refs(spec: str, id_offset: int = 0) -> list:
+    out = []
+    for tok in (spec or "").split(";"):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if tok.startswith("v"):
+            n = tok[1:]
+            if not n.isdigit():
+                raise ValueError(f"알 수 없는 근거 참조: {tok!r} (v#=frame, t#=transcript)")
+            out.append({"source": "frame", "ref": f"v{id_offset + int(n)}"})
+        elif tok.startswith("t"):
+            out.append({"source": "transcript", "ref": tok[1:]})
+        else:
+            raise ValueError(f"알 수 없는 근거 참조: {tok!r} (v#=frame, t#=transcript)")
+    return out
+
+
+def expand_lines(text: str, id_offset: int = 0) -> dict:
+    """TAB 구분 라인(T/V/K/C/G)을 evidence patch dict로 확장한다. 형식 위반은
+    ValueError로 fail-loud — 조용히 건너뛰면 지식이 소리 없이 유실된다. 값 내부의
+    탭은 작성 시 스페이스로 치환한다.
+
+    id_offset: 이미 존재하는 visual_evidence 개수. --from-lines가 재호출되면(교차대조
+    정정·커버리지 보강) V의 id를 v{id_offset+1}..부터 부여해 기존 v-id와 충돌하지
+    않게 하고, 같은 배치의 K/C가 쓰는 로컬 v# 참조도 같은 오프셋으로 재매핑한다
+    (LLM은 항상 로컬 v1..vN으로 쓴다)."""
+    patch = {"visual_evidence": [], "claims": [], "knowledge_items": [], "gaps": []}
+    vn = 0
+    for ln, raw in enumerate(text.splitlines(), 1):
+        if not raw.strip():
+            continue
+        f = raw.split("\t")
+        kind = f[0].strip()
+        try:
+            if kind == "T":
+                patch["video_type"] = {"primary": f[1], "confidence": f[2], "basis": f[3]}
+            elif kind == "V":
+                vn += 1
+                patch["visual_evidence"].append({
+                    "id": f"v{id_offset + vn}", "type": f[1], "timestamp": float(f[2]),
+                    "frame": f[3], "confidence": f[4], "value": f[5]})
+            elif kind == "K":
+                patch["knowledge_items"].append({
+                    "type": f[1], "timestamp": float(f[2]),
+                    "evidence": _parse_refs(f[3], id_offset), "content": f[4]})
+            elif kind == "C":
+                c = {"timestamp": float(f[1]), "evidence": _parse_refs(f[2], id_offset),
+                     "claim": f[3], "verification": {"status": "unaudited"}}
+                if len(f) > 4 and f[4].startswith("conflict="):
+                    a, _, b = f[4][len("conflict="):].partition("=>")
+                    c["conflict"] = {"transcript": a, "screen": b}
+                patch["claims"].append(c)
+            elif kind == "G":
+                patch["gaps"].append({"start": float(f[1]), "end": float(f[2]), "reason": f[3]})
+            else:
+                raise ValueError(f"알 수 없는 레코드 종류: {kind!r}")
+        except (IndexError, ValueError) as e:
+            # 모든 예외를 행 번호로 수렴시킨다 — 특수 케이스 재-raise는 행 번호를
+            # 잃어 "INVALID 보고 1회 수정" 왕복을 깬다. 원본 메시지는 `— {e}`에 남는다.
+            raise ValueError(f"{ln}행 형식 오류 ({kind}): {raw[:80]!r} — {e}") from e
+    return patch
+
+
 def merge(ev: dict, patch: dict) -> dict:
     """LLM 산출물을 골격에 병합한다.
 
@@ -625,6 +692,20 @@ def validate(ev: dict) -> list:
             errs.append(f"visual_evidence[{vid}].frame: {frame!r} not in provenance.frames "
                         f"— 실재하지 않는 프레임을 근거로 쓸 수 없다")
 
+    # 중복 id 심층 방어 — expand_lines의 id_offset이 잘못되거나(호출부 버그) 두 소스가
+    # 겹쳐 써도 여기서 잡는다. merge()의 setdefault는 id가 이미 있으면 그냥 통과시키므로
+    # 이 검사가 마지막 방어선이다.
+    _seen_ve_ids, _dupe_ve_ids = [], []
+    for v in ev.get("visual_evidence") or []:
+        if not isinstance(v, dict):
+            continue
+        vid = v.get("id")
+        if vid in _seen_ve_ids and vid not in _dupe_ve_ids:
+            _dupe_ve_ids.append(vid)
+        _seen_ve_ids.append(vid)
+    for vid in _dupe_ve_ids:
+        errs.append(f"visual_evidence: 중복 id {vid!r}")
+
     for c in ev.get("claims") or []:
         if not isinstance(c, dict):
             continue
@@ -654,6 +735,99 @@ def validate(ev: dict) -> list:
     return errs
 
 
+# ── video.md 렌더러 — "정본은 evidence.json, video.md는 그것의 렌더링"의 문자적 구현.
+# LLM이 16KB 문서를 출력하던 비용(solo 실측 output의 약 절반)을 0으로 만든다.
+# 자율 구성 대신 고정 템플릿 — 값·근거는 evidence와 바이트 단위로 동일하다.
+
+_TYPE_LABELS = {
+    "command": "명령어", "setting": "설정", "action": "조작", "criterion": "판단 기준",
+    "prerequisite": "준비조건", "warning": "주의사항", "procedure": "절차",
+    "result": "결과", "comparison": "비교", "claim": "주장", "concept": "개념",
+    "example": "예시",
+}
+
+
+def _safe_ts(val) -> float:
+    """null·비수치 timestamp를 0.0으로 — --render는 저장된 파일에 단독 실행될 수 있어
+    validate를 안 거친 값이 올 수 있다 (파일 내 기존 try/except 관례와 동일)."""
+    try:
+        return float(val or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _evidence_tag(item: dict) -> str:
+    srcs = {e.get("source") for e in (item.get("evidence") or []) if isinstance(e, dict)}
+    if "frame" in srcs and "transcript" in srcs:
+        return "화면+자막"
+    if "frame" in srcs:
+        return "화면 확인"
+    return "자막 근거만"
+
+
+def _item_line(item: dict, text_key: str) -> str:
+    t = common.fmt_ts(_safe_ts(item.get("timestamp")))
+    line = f"- {item.get(text_key, '')} `(t={t})` [{_evidence_tag(item)}]"
+    cf = item.get("conflict")
+    if isinstance(cf, dict) and cf:
+        line += f" — ⚠️ 자막 \"{cf.get('transcript', '')}\" vs 화면 \"{cf.get('screen', '')}\" (화면 채택)"
+    return line
+
+
+def _transcript_source(ev: dict) -> str:
+    tr = (ev.get("provenance") or {}).get("transcript") or {}
+    src = tr.get("source")
+    if not src:
+        return "정보 없음"
+    return f"{src}({tr.get('lang', '?')})"
+
+
+def render_video_md(ev: dict, cross_flags: int = 0, coverage_added: int = 0, note: str = "") -> str:
+    v = ev.get("video") or {}
+    vt = ev.get("video_type") or {}
+    verify_line = (f"- **검증**: 교차 대조 flag {cross_flags}건 · 커버리지 보강 {coverage_added}건 · "
+        "**표본 감사 미실시 — 근거는 프레임·자막으로 추적 가능하나 독립 검증되지 않음**")
+    if note:
+        verify_line += f" · {note}"
+    lines = [
+        f"# {v.get('title', '(제목 없음)')}",
+        "",
+        f"- **URL**: {v.get('url', '')}",
+        f"- **길이**: {common.fmt_ts(_safe_ts(v.get('duration')))} · **채널**: {v.get('channel', '')}",
+        f"- **자막 출처**: {_transcript_source(ev)}",
+        f"- **영상 유형**: {vt.get('primary', '?')} ({vt.get('confidence', '?')}) — {vt.get('basis', '')}",
+        verify_line,
+        "",
+        "## 핵심 지식",
+        "",
+    ]
+    items = ev.get("knowledge_items") or []
+    rank = {t: i for i, t in enumerate(AUDIT_PRIORITY)}
+    for typ in sorted({i.get("type") for i in items}, key=lambda t: rank.get(t, 99)):
+        lines.append(f"### {_TYPE_LABELS.get(typ, typ)}")
+        for it in items:
+            if it.get("type") == typ:
+                lines.append(_item_line(it, "content"))
+        lines.append("")
+    claims = ev.get("claims") or []
+    if claims:
+        lines += ["## 주장·설명", ""]
+        for c in claims:
+            lines.append(_item_line(c, "claim"))
+        lines.append("")
+    lines += ["## 누락 후보", ""]
+    for g in ev.get("gaps") or []:
+        if isinstance(g, dict):
+            lines.append(f"- {common.fmt_ts(_safe_ts(g.get('start')))}–"
+                         f"{common.fmt_ts(_safe_ts(g.get('end')))} 구간 미확인 ({g.get('reason', '')})")
+    for fl in ev.get("flags") or []:
+        lines.append(f"- flag: {fl}")
+    if not (ev.get("gaps") or ev.get("flags")):
+        lines.append("- (기록된 공백 없음)")
+    lines += ["", "---", f"*evidence.json이 정본이다 — 이 문서는 `evidence.py --render`가 생성했다.*", ""]
+    return "\n".join(lines)
+
+
 def summary_line(ev: dict) -> str:
     p = ev["provenance"]
     return (f"EVIDENCE schema={ev['schema_version']} "
@@ -672,6 +846,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="evidence.json 병합·검증")
     ap.add_argument("cache_dir")
     ap.add_argument("--merge", help="병합할 patch json 경로")
+    ap.add_argument("--from-lines", dest="from_lines",
+                    help="컴팩트 TSV 라인 파일을 patch로 확장해 병합 (T/V/K/C/G). "
+                    "값 내부의 탭은 작성 시 스페이스로 치환한다")
     ap.add_argument("--verdicts", help="감사 판정 json 경로 (claim_id/status/auditor/note 배열)")
     ap.add_argument("--add-frames", dest="add_frames",
                     help="확대 프레임 등록 — zoom.py 출력을 담은 파일 경로 (FRAME 줄 파싱)")
@@ -685,6 +862,12 @@ def main() -> int:
                     help="커버리지 감사용 지식 목록 출력 (claims + knowledge_items)")
     ap.add_argument("--cross-check", dest="cross_check", action="store_true",
                     help="해시·수치 판독이 갈린 자리 검출 (LLM 없이, 감사 후보 선정용)")
+    ap.add_argument("--render", action="store_true",
+                    help="evidence.json에서 video.md를 결정론적으로 생성")
+    ap.add_argument("--cross-flags", dest="cross_flags", type=int, default=0)
+    ap.add_argument("--coverage-added", dest="coverage_added", type=int, default=0)
+    ap.add_argument("--note", default="",
+                    help="검증 줄 끝에 덧붙일 자유 텍스트(예: 커버리지 감사 생략 사유)")
     ap.add_argument("--summary", action="store_true")
     args = ap.parse_args()
 
@@ -698,12 +881,20 @@ def main() -> int:
     # patch가 evidence.json에 남아 스키마 게이트가 무의미해진다 (E2E 실측에서 발견:
     # exit 2를 받고도 잘못된 claim 2건·visual_evidence 1건이 파일에 들어갔다).
     # 사본에 적용해 검증한 뒤 통과할 때만 교체한다.
-    writing = bool(args.merge or args.verdicts or args.add_frames)
+    writing = bool(args.merge or args.verdicts or args.add_frames or args.from_lines)
     if writing:
         candidate = json.loads(json.dumps(ev))
         if args.add_frames:
             names = parse_frame_lines(Path(args.add_frames).read_text(encoding="utf-8"))
             candidate = register_frames(candidate, names)
+        if args.from_lines:
+            try:
+                candidate = merge(candidate, expand_lines(
+                    Path(args.from_lines).read_text(encoding="utf-8"),
+                    id_offset=len(candidate.get("visual_evidence") or [])))
+            except ValueError as e:
+                print(f"INVALID: {e}", file=sys.stderr)
+                return 2
         if args.merge:
             candidate = merge(candidate, json.loads(Path(args.merge).read_text(encoding="utf-8")))
         if args.verdicts:
@@ -724,6 +915,11 @@ def main() -> int:
             print(f"CROSSCHECK {f['kind']}\t{' vs '.join(f['values'])}\t{','.join(f['ids'])}")
         if not flags:
             print("CROSSCHECK none")
+    if args.render:
+        md = render_video_md(ev, args.cross_flags, args.coverage_added, args.note)
+        out = Path(cd) / "video.md"
+        out.write_text(md, encoding="utf-8", newline="\n")
+        print(f"RENDERED {out}")
     if args.summary:
         print(summary_line(ev))
     if args.digest:

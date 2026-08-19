@@ -11,9 +11,9 @@ Turn YouTube videos into **verified working knowledge** for AI agents — transc
 AI가 대신 영상을 보고, 자막과 화면을 함께 이해하고, 검증된 지식으로 변환합니다.
 이후 AI는 그 내용을 설명하거나 질문에 답하고, 현재 작업과 비교하거나 튜토리얼을 따라 할 수 있습니다.
 
-[![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
+[![Version](https://img.shields.io/badge/version-0.8.0-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-241%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-285%20passed-brightgreen.svg)](tests/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://claude.com/claude-code)
 [![Languages](https://img.shields.io/badge/video-KO%20%7C%20EN-orange.svg)](#)
 
@@ -105,7 +105,7 @@ If a value cannot be read safely, `tuto` emits `⚠️ needs visual check` inste
 }
 ```
 
-Confidence is **never a fabricated number** — the pipeline has no basis for probability estimates, so only `high|medium|low` and `verified|disputed|unverifiable|unaudited` are allowed. `unaudited` is deliberately distinct from `verified`: 표본 감사는 v0.5.0에서 제거됐다(실측: 4편 24건 판정 수정 0건) — 커버리지 감사(haiku)와 결정론적 교차 대조가 검증을 담당한다. No remaining step assigns `verified`, so a v0.5.0 `evidence.json` shows `unaudited` on effectively every item — that must not look like passing. See [Limitations](#limitations).
+Confidence is **never a fabricated number** — the pipeline has no basis for probability estimates, so only `high|medium|low` and `verified|disputed|unverifiable|unaudited` are allowed. `unaudited` is deliberately distinct from `verified`: 표본 감사는 v0.5.0에서 제거됐다(실측: 4편 24건 판정 수정 0건) — 커버리지 감사(haiku)와 결정론적 교차 대조가 검증을 담당한다. No remaining step assigns `verified`, so an `evidence.json` shows `unaudited` on effectively every item — that must not look like passing. See [Limitations](#limitations).
 
 Full spec: [`docs/eval/evidence-schema.md`](docs/eval/evidence-schema.md)
 
@@ -207,7 +207,7 @@ No API key is required. Transcript acquisition falls back through native caption
 3. ⚠️ The exact checkbox and click moments are hidden by a transition. (t=03:51)
 
 ## Verification stamp
-Sample audit: not run in v0.5.0 — evidence is frame/caption-traceable but not independently audited.
+Sample audit: not run — evidence is frame/caption-traceable but not independently audited.
 Cross-check: 1 value disagreement found, re-read and corrected before writing.
 Coverage audit (haiku): 1 missing knowledge item recovered.
 ```
@@ -220,9 +220,13 @@ Follow-up questions in the same session reuse cached frames and captions, so the
 
 These are measured golden-set and regression-run results, not marketing estimates. The evaluation protocol uses 3–5 user-verified tutorials and is intended for per-video regression diagnosis, not statistical generalization.
 
-**v0.4.0(위임 파이프라인) 기준. v0.5.0 solo 실측: $2.91 · 12.1 min (opus session, measured
-2026-08-18; $1.5 target missed, accepted) — 상세는
-[`docs/eval/reports/2026-08-18-round5.md`](docs/eval/reports/2026-08-18-round5.md#solo-모드-v050-실측) 참고.**
+**v0.4.0(위임 파이프라인) 기준. v0.8.0(함수형 서브에이전트 — 얇은 오케스트레이터 + 일회용
+서브에이전트: 비전 haiku ×2 → 합성 sonnet → 커버리지 haiku, 본체는 분석 중 이미지를 한 장도
+Read하지 않음) 실측: 11분 27초 한국어 튜토리얼 1편, sonnet 세션 기준 $1.55~1.65 · api 4~5분
+(`MAX_THINKING_TOKENS=0` 환경) — v0.5.0 solo($2.91 · 12.1 min) 대비 -45%. 사고 토큰을
+제한하지 않는 환경에서는 회당 +$0.7~0.9 늘어난다 — `MAX_THINKING_TOKENS=0` 설정을
+권장하지만(필수 아님) 스킬이 실행 환경을 강제할 수는 없다. 상세는
+[`docs/eval/reports/2026-08-18-function-agents.md`](docs/eval/reports/2026-08-18-function-agents.md) 참고.**
 
 | Metric | Result | Meaning |
 |---|:---:|---|
@@ -237,7 +241,7 @@ These are measured golden-set and regression-run results, not marketing estimate
 | **Download + analysis** | **8.1× faster** | 154s → 19s |
 | **Zoom extraction** | **5.4× faster** | 327s → 61s |
 | **Audit escalation** | **0%** | On the selected audit model |
-| **Tests** | **241 passing** | Current regression suite (`python -m pytest tests/ -q`) |
+| **Tests** | **285 passing** | Current regression suite (`python -m pytest tests/ -q`) |
 
 **Why total cost falls less than `cache_write`:** `cache_read` scales with how much conversation
 already precedes the run, not with the pipeline. Between the two measurements above it went
@@ -252,6 +256,15 @@ netting only −10.4% overall instead of the −4~5.5× originally targeted. A m
 (cheaper orchestrator) was attempted but not adopted: it caused incomplete runs or polling
 blowup in this measurement setup. Full trial-and-error log: [`docs/eval/reports/2026-08-18-round5.md`](docs/eval/reports/2026-08-18-round5.md).
 
+**v0.8.0 quality, measured honestly.** Knowledge items landed at 30–36 per run, and hallucinations
+stayed at 0. The cost cut was not free, though: reading frames through a disposable `haiku` vision
+subagent produces roughly **1 command/setting misspelling per video** — small on-screen text is
+genuinely hard for a fast vision pass to read correctly. Cross-check, the `⚠️ needs visual check`
+flag, and the coverage audit form a three-layer net that catches some but not all of these — in one
+measured run, cross-check flagged a `100`↔`200` value disagreement and a recheck subagent corrected
+it before `video.md` was written. That is partial defense, not a fix: sample audits remain unrun
+(see [Limitations](#limitations)). Full numbers: [`docs/eval/reports/2026-08-18-function-agents.md`](docs/eval/reports/2026-08-18-function-agents.md).
+
 See [`docs/eval/`](docs/eval/) for the evaluation protocol and cost-accounting tool.
 
 ---
@@ -259,19 +272,24 @@ See [`docs/eval/`](docs/eval/) for the evaluation protocol and cost-accounting t
 ## How it works
 
 ```text
-MAP                    READ (parallel)        ZOOM                   EVIDENCE               CROSS-CHECK            COVERAGE (haiku)       ORGANIZE
-──────────             ──────────             ──────────             ──────────             ──────────             ──────────             ──────────
-analyze.py             map frames             zoom.py                evidence.py            evidence.py            1 subagent             video.md
-├ yt-dlp               ├ parallel Read        ├ 1 call only          ├ --merge              ├ --cross-check        ├ digest+pass1 only    ├ single Write
-├ captions             ├ pick zoom points     ├ 4×1024 max           ├ visual_evidence      ├ hash/number reread   ├ no image Read        ├ free-form structure
-├ heatmap              ├ cue-word first       ├ 6 frames total       ├ claims               ├ zero extra cost      └ gaps → merge         ├ (t=MM:SS) refs
-├ chapters             └ +1 for 60s gaps      └ 1 crop max           └ knowledge_items      └ no subagent                                 └ verification stamp
-├ activity peaks
+MAP                     VISION① (haiku)         ZOOM                    VISION② (haiku)         SYNTHESIZE (sonnet)     CROSS-CHECK             COVERAGE (haiku)        RENDER
+──────────              ──────────              ──────────              ──────────              ──────────              ──────────              ──────────              ──────────
+analyze.py              transcribe.md           zoom.py                 transcribe.md           synthesize.md           evidence.py             digest+pass1 only       evidence.py
+├ yt-dlp                ├ map frames 병렬 Read  ├ 1 call only           ├ zoom frames Read      ├ 이미지 Read 금지      ├ --from-lines          ├ no image Read         ├ --render
+├ captions              ├ V라인 (화면 전사)     ├ 4×1024 max            └ V라인 (전사)          ├ 자막+V라인 텍스트만   ├ --cross-check         └ gaps → merge          ├ single Write
+├ heatmap               └ Z라인 (확대 요청)     ├ 6 frames total                                ├ V 전부 복사           ├ hash/number reread                            ├ free-form structure
+├ chapters                                      └ 1 crop max                                    └ + K/C/G 단일 배치     ├ zero extra cost                               ├ (t=MM:SS) refs
+├ activity peaks                                                                                                        └ flag 시 재확인(haiku)                         └ verification stamp
 └ map frames
 ```
 
-No delegation — the orchestrating agent runs MAP through CROSS-CHECK itself, in one context. The
-only subagent call in the pipeline is the coverage audit (`haiku`), which never reads images.
+Thin orchestrator, disposable subagents — the orchestrating agent (본체) runs MAP, ZOOM,
+CROSS-CHECK, and RENDER itself (script calls and deterministic post-processing), but it never
+Reads a video frame during analysis. Frame reading happens twice, inside throwaway vision
+subagents (`haiku`) that vanish after writing a line-based transcript (V-lines) and, on the map
+pass, zoom targets (Z-lines). A third disposable subagent (`sonnet`, text-only — no image access)
+synthesizes those transcripts and the caption transcript into knowledge, claims, and conflicts.
+The only remaining subagent call is the coverage audit (`haiku`), which never reads images either.
 
 `evidence.json`이 정본이고 `video.md`는 그것을 사람이 읽게 조직한 것입니다.
 **문서를 먼저 쓰고 근거를 맞추지 않습니다** — 순서가 바뀌면 문서에 맞춰 근거를 지어내게 됩니다.
@@ -284,7 +302,7 @@ Uniform sampling and scene-change detection can skip static screens—exactly wh
 
 ### 2. Resolution tiering
 
-Text-heavy frames such as slides, tables, menus, and terminals are extracted at **1024px**; illustrations, transitions, and talking heads use **512px**. Zoom points chosen without map coverage should be requested at 1024px (see SKILL §2). `zoom.py` itself will not process more than 20 high-resolution frames or 60 total frames per call. In solo mode the orchestrator makes a **single** `zoom.py` call and keeps it far under that ceiling — a self-imposed budget of 4 high-resolution frames and 6 total, plus at most one `--crop` follow-up.
+Text-heavy frames such as slides, tables, menus, and terminals are extracted at **1024px**; illustrations, transitions, and talking heads use **512px**. Zoom points chosen without map coverage should be requested at 1024px (see SKILL §2). `zoom.py` itself will not process more than 20 high-resolution frames or 60 total frames per call. The orchestrator makes a **single** `zoom.py` call per analysis and keeps it far under that ceiling — a self-imposed budget of 4 high-resolution frames and 6 total, plus at most one `--crop` follow-up.
 
 ### 3. Gap detection
 
@@ -294,9 +312,9 @@ Low-motion verification sections near the end of tutorials are easy for samplers
 
 Per-claim adversarial sample audits — a fresh agent independently trying to refute a sampled subset of claims — were removed in v0.5.0: 표본 감사는 v0.5.0에서 제거됐다(실측: 4편 24건 판정 수정 0건) — 커버리지 감사(haiku)와 결정론적 교차 대조가 검증을 담당한다.
 
-`evidence.py --cross-check` re-reads hashed and numeric values across `visual_evidence`, `claims`, and `knowledge_items` looking for internal disagreement — at **zero additional cost**, since it is deterministic post-processing rather than a subagent call. Frames it flags are re-read once and the value is corrected via `merge` before `video.md` is written.
+`evidence.py --cross-check` re-reads hashed and numeric values across `visual_evidence`, `claims`, and `knowledge_items` looking for internal disagreement — at **zero additional cost**, since it is deterministic post-processing rather than a subagent call. Frames it flags are re-read once by a disposable vision subagent (`haiku`) and the value is corrected via `merge` before `video.md` is written — this recheck path has caught real errors in measurement (a `100`↔`200` value disagreement, corrected before render).
 
-Cross-check cannot catch a reading that is wrong but internally *consistent* — a value nobody disagreed with is not the same as a value someone independently verified. That gap is why `verification.status` defaults to, and in solo mode effectively stays at, `unaudited` (see [Limitations](#limitations)).
+Cross-check cannot catch a reading that is wrong but internally *consistent* — a value nobody disagreed with is not the same as a value someone independently verified. That gap is why `verification.status` defaults to, and effectively stays at, `unaudited` (see [Limitations](#limitations)).
 
 ### 5. Coverage audit
 
@@ -332,6 +350,7 @@ Every round had to demonstrate no quality regression or be rolled back.
 | **R4** | Removed images from the orchestrator context | `cache_write` **−95%** on frame-reading calls (**−76%** across the whole run), total cost **−11%**, with a net quality improvement |
 | **R5** | Cut subagent call counts (parallel reads, single write, fewer crop/audit rounds); measured whether sample audits earn their cost | Builder cost **−49%** (41 → 16 calls); total cost **−10.4%** (orchestrator cost grew **+56%**, absorbing most of the builder win); sample audit fixed at 3 items after injected-error testing showed no detection-power loss vs. 6 |
 | **R6 (solo)** | Removed delegation entirely — the orchestrator runs MAP through CROSS-CHECK itself instead of handing frame-reading and document-writing to separate agents; removed sample audits, leaving deterministic cross-check plus a single `haiku` coverage-audit call as the only verification | Sample audits corrected **0 / 24** verdicts across 4 videos before removal — basis for cutting them; solo cost/time: **$2.91 · 12.1 min (opus session, measured 2026-08-18; $1.5 target missed, accepted)** — see [Measured results](#measured-results) |
+| **R7 (function-agents, v0.8.0)** | Went the opposite direction from solo — split the single context back into disposable subagents, but this time the orchestrator itself never reads a frame: two `haiku` vision passes read map/zoom frames and vanish, a text-only `sonnet` pass synthesizes knowledge, `haiku` audits coverage, thinking capped to 0 across the whole run | Converged at **$1.55~1.65** (`sonnet` session, `MAX_THINKING_TOKENS=0`), api time **4~5 min** — solo ($2.91) 대비 **-45%**; knowledge 30~36 items, hallucinations 0. Cost gate (≤$1.5) missed by **+3~10%** but accepted by the user; misread gate (0) also missed — **~1 command-spelling misread per video** persisted (small on-screen text) and was accepted as a known limitation — see [Measured results](#measured-results) and [`docs/eval/reports/2026-08-18-function-agents.md`](docs/eval/reports/2026-08-18-function-agents.md) |
 
 <details>
 <summary><b>Lessons worth keeping</b></summary>
@@ -381,6 +400,9 @@ See [`docs/eval/golden-set-protocol.md`](docs/eval/golden-set-protocol.md).
 - Values not visible in evidence frames are intentionally left unresolved instead of inferred.
 - Developed and validated on Windows. macOS/Linux are not yet fully validated.
 - 산출물은 근거 추적은 되나 표본 감사를 거치지 않는다 — 값은 프레임으로 재확인 가능하다.
+- 작은 화면 글자(축약 명령어·설정 키 등)는 비전 서브에이전트가 오독할 수 있다 — 영상당 약 1건
+  발생 가능. 교차 대조·`⚠️` 표기·커버리지 감사 3중 안전망이 부분적으로 방어하지만(실측: 교차
+  대조가 `100`↔`200` 오독 1건을 재확인으로 정정) 완전히 막지는 못한다.
 
 ---
 
@@ -416,7 +438,7 @@ If a tutorial breaks `tuto`, a public video URL and the missed timestamp are esp
 
 | Document | Purpose |
 |---|---|
-| [`skills/tuto/SKILL.md`](skills/tuto/SKILL.md) | Solo pipeline contract |
+| [`skills/tuto/SKILL.md`](skills/tuto/SKILL.md) | Orchestrator pipeline contract |
 | [`docs/superpowers/specs/`](docs/superpowers/specs/) | Design specs by iteration |
 | [`docs/superpowers/plans/`](docs/superpowers/plans/) | Implementation plans |
 | [`docs/eval/evidence-schema.md`](docs/eval/evidence-schema.md) | **evidence.json schema — canonical spec** |
@@ -432,6 +454,6 @@ If a tutorial breaks `tuto`, a public video URL and the missed timestamp are esp
 
 **If tuto saves you from scrubbing a video frame by frame, consider giving the repo a ⭐.**
 
-<sub>Built as a Claude Code plugin · 241 tests passing</sub>
+<sub>Built as a Claude Code plugin · 285 tests passing</sub>
 
 </div>
