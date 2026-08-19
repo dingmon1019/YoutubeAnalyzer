@@ -28,7 +28,7 @@
    프레임파일명은 경로가 아니라 파일명(basename)만 — evidence.py validate가 basename을
    기대한다.
 
-   type: slide|ui|chart|code|table|text|other · confidence: high|med|low
+   type: slide|ui|chart|code|table|text|other · confidence: high|medium|low
 4. **모드=지도일 때만** 확대 지점을 고른다:
    ① 값 밀도(터미널·설정창·표·코드) 상위 3~4곳 ② 지시어 큐 시점 우선
    ③ 지도가 60초 이상 비는 구간 1곳 — 못 본 화면은 "텍스트 없음"으로 확정할 수 없다.

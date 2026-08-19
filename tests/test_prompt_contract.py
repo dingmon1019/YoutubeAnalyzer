@@ -120,3 +120,11 @@ class TestNoAutocorrectContract:
     # 실측(2026-08-19): haiku 비전이 축약 명령 키를 온전한 단어로 펴 읽어 4회 연속 오독
     def test_no_abbreviation_expansion(self):
         assert "축약어를 펴지 마라" in TRANSCRIBE
+
+
+class TestConfidenceVocabularyContract:
+    # 실전 버그(2026-08-19, 32분 영상): 프롬프트가 'med'를 안내해 스키마 게이트가
+    # V 10건을 거부 — 프롬프트 어휘는 evidence.py 스키마 정본과 일치해야 한다
+    def test_confidence_matches_schema(self):
+        assert "high|medium|low" in TRANSCRIBE
+        assert "|med|" not in TRANSCRIBE
