@@ -18,7 +18,7 @@ SIG = {
 
 def test_allocate_count_formula():
     ts = analyze.allocate_map_budget(1800.0, SIG)   # 30분
-    assert len(ts) == 16
+    assert len(ts) == 29  # 리뷰 F1 갱신(2026-08-19): 20분 초과 1.0/분·캡 34, raw n=30, 실채택 29
 
 
 def test_allocate_includes_chapter_starts_and_ends():
@@ -47,7 +47,10 @@ def test_allocate_zero_duration_returns_empty():
 def test_allocate_short_video_respects_invariants():
     ts = sorted(analyze.allocate_map_budget(10.0, SIG))
     assert all(0 <= t <= 10.0 for t in ts)
-    n = min(16, max(6, round(10.0 / 60 * 0.7)))
+    # 리뷰 F4③ 갱신(2026-08-19): stale 캡 16 정리. 같은 커밋의 F1이 캡을 28→34로 다시
+    # 올리므로(28로만 갱신하면 즉시 재-stale), 실제 코드와 일치하는 34를 쓴다 — 편차 및
+    # 사유는 커밋 메시지 참고. duration=10.0은 어떤 캡값에서도 n=6이라 결과엔 영향 없다.
+    n = min(34, max(6, round(10.0 / 60 * 0.7)))
     min_gap = max(8.0, 10.0 / n / 2)
     assert all(b - a >= min_gap * 0.99 for a, b in zip(ts, ts[1:]))
     assert len(ts) >= 1  # at least the start anchor survives
@@ -55,7 +58,7 @@ def test_allocate_short_video_respects_invariants():
 
 def test_allocate_normal_duration_unchanged():
     ts = analyze.allocate_map_budget(1800.0, SIG)
-    assert len(ts) == 16
+    assert len(ts) == 29  # 리뷰 F1 갱신(2026-08-19): 20분 초과 1.0/분·캡 34, raw n=30, 실채택 29
     assert any(abs(t - 1.0) < 0.5 for t in ts) and any(abs(t - 1798.0) < 1 for t in ts)
 
 
@@ -74,6 +77,16 @@ RICH_SIG = {
 CLUSTERED_SIG = {
     "chapters": [], "heatmap": [], "sponsorblock": [],
     "activity": {"curve": [], "peaks": [15, 87, 140, 151, 178, 231, 267]},
+}
+
+# 순수 그리드 전용 — 챕터/히트맵/스폰서블록이 전혀 없어 앵커·제외구간과의 우연한 근접충돌이
+# 없다. 분량 비례 캡(TestMapBudgetScalesForLongVideos)은 "duration -> n" 공식 자체를 검증하는
+# 것이 목적이라 SIG(챕터·스폰서블록 포함)를 쓰면 후보 소진으로 실채택 수가 공식값보다 줄어들
+# 수 있다(실측: SIG로 1942초 호출 시 23이 아니라 22 — 스폰서블록 100~160s 구간이 그리드 후보
+# 1개를 통째로 삼킴). EMPTY_SIG는 그 혼입을 없애 공식값이 그대로 채택 수가 되게 한다.
+EMPTY_SIG = {
+    "chapters": [], "heatmap": [], "sponsorblock": [],
+    "activity": {"curve": [], "peaks": []},
 }
 
 
@@ -195,28 +208,31 @@ def test_extract_map_frames_keeps_best_round_when_later_round_is_worse(monkeypat
 
 
 def test_allocate_extra_never_exceeds_spec_ceiling():
-    """리뷰 발견(Finding 2): target = n + extra에 40 상한을 다시 걸지 않으면, n이 이미
-    40인 긴 영상에서 backfill이 41 -> 50 -> 75 ...로 발산해 스펙(§3.3)의 지도 예산 상한
-    min(40, ...)을 조용히 깬다 (실측: extra=1000 -> len=75)."""
+    """리뷰 발견(Finding 2): target = n + extra에 상한을 다시 걸지 않으면, n이 이미
+    상한인 긴 영상에서 backfill이 계속 발산해 스펙(§3.3)의 지도 예산 상한을 조용히
+    깬다. 리뷰 F1(2026-08-19) 갱신: 캡 28→34, 20분 초과 구간은 1.0/분."""
     dense = {
         "chapters": [], "heatmap": [], "sponsorblock": [],
         "activity": {"curve": [], "peaks": list(range(5, 2000, 3))},
     }
-    assert len(analyze.allocate_map_budget(2000.0, dense)) == 16  # 전제조건: n=16(상한)
+    # F1 갱신: 2000s>1200s → 1.0/분, n=round(2000/60*1.0)=33(신 캡 34 미만, 자연값)
+    assert len(analyze.allocate_map_budget(2000.0, dense)) == 33  # 전제조건
     for extra in (0, 1, 10, 100, 1000):
-        assert len(analyze.allocate_map_budget(2000.0, dense, extra=extra)) <= 16
+        assert len(analyze.allocate_map_budget(2000.0, dense, extra=extra)) <= 34
 
 
-def test_extract_map_frames_caps_target_at_40_for_long_video(monkeypatch, tmp_path):
-    """리뷰 발견(Finding 2): n이 이미 스펙 상한(40)인 긴 영상에서 dedup이 매 라운드
-    계속 깎아내도(정적인 영상 시뮬레이션: 매번 5장만 생존) target이 40을 넘는 요청을
-    하면 안 되고, 루프도 유한 회 안에 종료돼야 한다(더 늘 후보가 없으면 즉시 멈춤)."""
+def test_extract_map_frames_caps_target_at_34_for_long_video(monkeypatch, tmp_path):
+    """리뷰 발견(Finding 2): n이 이미 스펙 상한인 긴 영상에서 dedup이 매 라운드
+    계속 깎아내도(정적인 영상 시뮬레이션: 매번 5장만 생존) target이 상한을 넘는 요청을
+    하면 안 되고, 루프도 유한 회 안에 종료돼야 한다(더 늘 후보가 없으면 즉시 멈춤).
+    리뷰 F1(2026-08-19) 갱신: 캡 28→34."""
     duration = 2000.0
     dense = {
         "chapters": [], "heatmap": [], "sponsorblock": [],
         "activity": {"curve": [], "peaks": list(range(5, 2000, 3))},
     }
-    assert len(analyze.allocate_map_budget(duration, dense)) == 16  # 전제조건
+    # F1 갱신: 2000s>1200s → 1.0/분, n=round(2000/60*1.0)=33(신 캡 34 미만, 자연값)
+    assert len(analyze.allocate_map_budget(duration, dense)) == 33  # 전제조건
 
     requested_counts = []
 
@@ -232,7 +248,7 @@ def test_extract_map_frames_caps_target_at_40_for_long_video(monkeypatch, tmp_pa
     monkeypatch.setattr(analyze.frames, "dedup_frames", fake_dedup)
 
     kept, dropped = analyze.extract_map_frames(Path("video.mp4"), duration, dense, tmp_path)
-    assert all(c <= 16 for c in requested_counts)   # 어떤 라운드도 16장 초과 요청 안 함
+    assert all(c <= 34 for c in requested_counts)   # 어떤 라운드도 34장 초과 요청 안 함
     assert len(kept) == 5                            # best-so-far — 상한에 막혀 더는 못 늘어남
 
 
@@ -491,9 +507,44 @@ def test_main_timeout_reports_plain_text(monkeypatch, capsys):
 
 
 def test_map_budget_solo_scale():
-    """solo 모드 예산: 11:27(687s) 영상이 8장, 30분 영상이 16장 캡에 걸린다 (스펙 §4)."""
+    """solo 모드 예산: 11:27(687s) 영상이 8장 그대로, 30분 영상은 리뷰 F1 갱신(2026-08-19,
+    20분 초과 1.0/분·캡 34) 이후 신 캡(34) 미만인 자연값으로 나온다 (스펙 §4)."""
     assert len(analyze.allocate_map_budget(687.0, SIG)) <= 8 + 2   # 앵커 2장 여유
-    n_11m = min(16, max(6, round(687.0 / 60 * 0.7)))
+    n_11m = min(34, max(6, round(687.0 / 60 * 0.7)))
     assert n_11m == 8
     ts_30m = analyze.allocate_map_budget(1800.0, SIG)
-    assert len(ts_30m) <= 16
+    assert len(ts_30m) <= 34
+
+
+class TestMapBudgetScalesForLongVideos:
+    # 실측(2026-08-19, 32:22 영상): 고정 캡 16이 지도 밀도를 0.5장/분으로 깎아 G 15구간 발생.
+    # 리뷰 F1 갱신(2026-08-19): 캡만 28→34로 올려선 공백이 안 줄어(같은 32:22 영상 실신호
+    # 재검 결과 60초 초과 인접 프레임 간격이 여전히 12곳 — .superpowers/sdd/2026-08-19-
+    # long-video/final-fix-report.md 참고) 20분 초과 구간은 요율 자체를 1.0/분으로 올린다.
+    # EMPTY_SIG 사용 이유: SIG는 스폰서블록/챕터가 있어 후보 충돌로 채택 수가 공식값보다
+    # 줄 수 있다(순수 공식 검증이 목적이므로 그 혼입을 제거한다. 위 EMPTY_SIG 정의 참고).
+    def test_32min_scales(self):
+        # 1942초(32:22, >1200s) → round(32.37*1.0)=32장 (구 공식 23장 초과)
+        ts = analyze.allocate_map_budget(1942.0, EMPTY_SIG)
+        assert len(ts) == 32
+
+    def test_60min_caps_at_34(self):
+        # 3600초 → round(60)=60 → 캡 34
+        ts = analyze.allocate_map_budget(3600.0, EMPTY_SIG)
+        assert len(ts) == 34
+
+    def test_11min_unchanged(self):
+        # 687초(11:27, <=1200s → 0.7/분 그대로) → 8장 — 짧은 영상 회귀 금지
+        ts = analyze.allocate_map_budget(687.0, EMPTY_SIG)
+        assert len(ts) == 8
+
+    def test_1200s_1201s_boundary_is_discontinuous_by_design(self):
+        """20분(1200s) 경계에서 요율이 0.7/분(<=1200s)에서 1.0/분(>1200s)으로 바뀌어
+        14→20장으로 불연속 점프한다. 우연한 반올림 오차가 아니라 리뷰 F1이 의도한 설계
+        임을 테스트로 고정한다 — 향후 "부드럽게" 보간하려는 리팩터가 이 계약을 깨야
+        알아채도록."""
+        ts_1200 = analyze.allocate_map_budget(1200.0, EMPTY_SIG)   # 0.7/분 적용 마지막: round(20*0.7)=14
+        ts_1201 = analyze.allocate_map_budget(1201.0, EMPTY_SIG)   # 1.0/분 적용 시작: round(1201/60)=20
+        assert len(ts_1200) == 14
+        assert len(ts_1201) == 20
+        assert len(ts_1201) - len(ts_1200) == 6   # 불연속 점프 크기 명시

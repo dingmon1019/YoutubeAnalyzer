@@ -1103,3 +1103,122 @@ def test_render_includes_transcript_source():
     md = evidence.render_video_md(ev, note="커버리지 감사 생략 — 자막 없음")
     assert "자막 출처" in md and "captions" in md
     assert "커버리지 감사 생략" in md
+
+
+# ── 챕터별 절 구성 (라운드 "분량 비례 예산" Task 2) ─────────────────────────
+
+EV_WITH_TWO_ITEMS = {
+    "video": {"id": "y", "title": "챕터 테스트 영상", "url": "https://youtu.be/y",
+              "duration": 200.0, "channel": "채널"},
+    "video_type": {"primary": "tutorial", "confidence": "high", "basis": "화면 실연"},
+    "visual_evidence": [],
+    "claims": [],
+    "knowledge_items": [
+        {"id": "k1", "type": "command", "content": "pip install foo", "timestamp": 70.0,
+         "evidence": [], "verification": {"status": "unaudited"}},
+        {"id": "k2", "type": "action", "content": "실행 버튼 클릭", "timestamp": 130.0,
+         "evidence": [], "verification": {"status": "unaudited"}},
+    ],
+    "gaps": [],
+    "flags": [],
+}
+
+
+class TestRenderChapters:
+    CHAPTERS = [
+        {"start_time": 0, "end_time": 60, "title": "인트로"},
+        {"start_time": 60, "end_time": 120, "title": "설치"},
+        {"start_time": 120, "end_time": 180, "title": "실행"},
+    ]
+
+    def test_chapter_sections(self):
+        # K(ts=70)는 "설치" 절에, K(ts=130)는 "실행" 절에 들어간다
+        md = evidence.render_video_md(EV_WITH_TWO_ITEMS, chapters=self.CHAPTERS)
+        assert "### [01:00] 설치" in md and "### [02:00] 실행" in md
+        assert md.index("설치") < md.index("실행")  # 시간순 절 배열
+        assert "인트로" not in md  # 빈 챕터("인트로", 0~60)는 절을 만들지 않는다
+
+    def test_item_outside_chapters_goes_to_misc(self):
+        # ts=999(범위 밖)·ts=None 항목은 "### 기타" 절로
+        ev = json.loads(json.dumps(EV_WITH_TWO_ITEMS))
+        ev["knowledge_items"].append(
+            {"id": "k3", "type": "concept", "content": "범위 밖 지식", "timestamp": 999.0,
+             "evidence": [], "verification": {"status": "unaudited"}})
+        ev["knowledge_items"].append(
+            {"id": "k4", "type": "concept", "content": "타임스탬프 없는 지식", "timestamp": None,
+             "evidence": [], "verification": {"status": "unaudited"}})
+        md = evidence.render_video_md(ev, chapters=self.CHAPTERS)
+        assert "### 기타" in md
+        assert md.index("### 기타") > md.index("실행")  # 기타 절은 마지막
+        misc_pos = md.index("### 기타")
+        assert md.index("범위 밖 지식") > misc_pos
+        assert md.index("타임스탬프 없는 지식") > misc_pos
+
+    def test_no_chapters_keeps_flat_rendering(self):
+        # chapters=None이면 기존 유형별 렌더링 그대로 — 기존 테스트가 무변경 PASS인 것도 이 계약의 일부
+        md = evidence.render_video_md(EV_WITH_TWO_ITEMS)
+        assert "## 핵심 지식" in md and "### [" not in md
+
+    def test_chapter_item_carries_type_label(self):
+        # 챕터 모드에선 유형 절이 사라지므로 항목 줄에 유형 태그를 단다
+        md = evidence.render_video_md(EV_WITH_TWO_ITEMS, chapters=self.CHAPTERS)
+        assert "- [" in md  # 예: "- [명령어] pip install ..."
+
+    def test_chapter_items_sorted_by_timestamp_ascending(self):
+        """리뷰 F4② 발견: 챕터 절 내부 항목이 삽입 순서로 나와 04:15→04:40→04:28처럼
+        뒤섞이는 버그가 있었다 — timestamp 오름차순으로 정렬돼야 한다."""
+        ev = json.loads(json.dumps(EV_WITH_TWO_ITEMS))
+        ev["knowledge_items"] = [
+            {"id": "k1", "type": "command", "content": "A항목", "timestamp": 255.0,
+             "evidence": [], "verification": {"status": "unaudited"}},
+            {"id": "k2", "type": "command", "content": "B항목", "timestamp": 280.0,
+             "evidence": [], "verification": {"status": "unaudited"}},
+            {"id": "k3", "type": "command", "content": "C항목", "timestamp": 268.0,
+             "evidence": [], "verification": {"status": "unaudited"}},
+        ]
+        chapters = self.CHAPTERS + [{"start_time": 180, "end_time": 300, "title": "구간"}]
+        md = evidence.render_video_md(ev, chapters=chapters)
+        assert md.index("A항목") < md.index("C항목") < md.index("B항목")
+
+    def test_non_dict_chapter_element_is_skipped_not_fatal(self):
+        """리뷰 F4① 가드: chapters 원소 중 dict가 아닌 것이 섞여도(예: info.json 오염)
+        그 원소만 건너뛰고 나머지 유효한 챕터로 렌더를 완주한다."""
+        bad_chapters = [None, *self.CHAPTERS]
+        md = evidence.render_video_md(EV_WITH_TWO_ITEMS, chapters=bad_chapters)
+        assert "### [01:00] 설치" in md and "### [02:00] 실행" in md
+
+    def test_short_video_still_gets_chapter_layout(self):
+        """컨트롤러 재정(F3): 챕터 레이아웃 개선은 영상 길이와 무관한 의도된 동작이다 —
+        짧은 영상(300초 수준, 챕터 3개)도 chapters가 주어지면 예외 없이 챕터 절로
+        렌더되고 검증 스탬프·"표본 감사 미실시"가 보존된다."""
+        ev = json.loads(json.dumps(EV_WITH_TWO_ITEMS))
+        ev["video"]["duration"] = 300.0
+        md = evidence.render_video_md(ev, chapters=self.CHAPTERS)
+        assert "### [01:00] 설치" in md and "### [02:00] 실행" in md
+        assert "표본 감사 미실시" in md
+
+
+def test_render_cli_reads_chapters_from_info_json(tmp_path):
+    """--render는 <cache_dir>/info.json의 chapters 키를 읽어 절을 구성한다."""
+    evidence.save(tmp_path, EV_WITH_TWO_ITEMS)
+    (tmp_path / "info.json").write_text(json.dumps({
+        "chapters": [
+            {"start_time": 0, "end_time": 60, "title": "인트로"},
+            {"start_time": 60, "end_time": 120, "title": "설치"},
+            {"start_time": 120, "end_time": 180, "title": "실행"},
+        ]}, ensure_ascii=False), encoding="utf-8")
+    p = _run([str(tmp_path), "--render"])
+    assert p.returncode == 0
+    out = (tmp_path / "video.md").read_text(encoding="utf-8")
+    assert "### [01:00] 설치" in out and "### [02:00] 실행" in out
+
+
+def test_render_cli_falls_back_to_flat_on_malformed_info_json(tmp_path):
+    """info.json이 파손되어도 stderr에 NOTE를 남기고 평면 렌더링으로 완주한다(fail-loud 완화형)."""
+    evidence.save(tmp_path, EV_WITH_TWO_ITEMS)
+    (tmp_path / "info.json").write_text("{이것은 json이 아니다", encoding="utf-8")
+    p = _run([str(tmp_path), "--render"])
+    assert p.returncode == 0
+    assert "NOTE" in p.stderr
+    out = (tmp_path / "video.md").read_text(encoding="utf-8")
+    assert "## 핵심 지식" in out and "### [" not in out

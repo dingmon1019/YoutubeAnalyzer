@@ -128,3 +128,37 @@ class TestConfidenceVocabularyContract:
     def test_confidence_matches_schema(self):
         assert "high|medium|low" in TRANSCRIBE
         assert "|med|" not in TRANSCRIBE
+
+
+class TestProportionalBudgetContract:
+    # 실측(2026-08-19): 고정 상한이 32분 영상 밀도를 1/3로 깎음
+    def test_zoom_scales_with_duration(self):
+        assert "20분 초과" in TRANSCRIBE   # 지도 모드: 긴 영상은 확대 6~8곳
+
+    def test_knowledge_cap_scales(self):
+        assert "최대 30건" in SYNTHESIZE   # 기존 계약 유지
+        assert "분당" in SYNTHESIZE        # 비례 조항
+
+
+class TestZoomLeverContract:
+    # 리뷰 F2(2026-08-19): "확대 레버"가 문구상 상한만 올라가고 실제 선택 기준은 그대로면
+    # 레버가 작동하지 않는다 — 항목별 개수도 20분 초과 시 함께 올라가야 하고
+    # (6곳+2곳=상한 6~8곳과 합이 맞는다), 판정 근거가 명시돼야 한다.
+    def test_density_pick_count_scales(self):
+        assert "상위 3~4곳(영상 20분 초과면 6곳)" in TRANSCRIBE
+
+    def test_gap_pick_count_scales(self):
+        assert "구간 1곳(초과면 2곳)" in TRANSCRIBE
+
+    def test_transcribe_states_duration_basis(self):
+        assert "STATUS duration=" in TRANSCRIBE
+
+    def test_synthesize_states_duration_basis(self):
+        assert "STATUS duration=" in SYNTHESIZE
+
+
+class TestKnowledgeFloorContract:
+    # 실측(2026-08-19, v0.9.0 run1): "분당 2.5건까지"는 천장일 뿐 — 모델이 40건에서 멈춤.
+    # 긴 영상 밀도는 목표·하한이 있어야 나온다
+    def test_long_video_has_floor_target(self):
+        assert "분당 1.5건 이상을 목표" in SYNTHESIZE

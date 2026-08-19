@@ -782,7 +782,88 @@ def _transcript_source(ev: dict) -> str:
     return f"{src}({tr.get('lang', '?')})"
 
 
-def render_video_md(ev: dict, cross_flags: int = 0, coverage_added: int = 0, note: str = "") -> str:
+def _tagged_item_line(item: dict, text_key: str, typ: str) -> str:
+    """_item_line 결과의 `- ` 뒤에 `[유형]` 태그를 삽입한다 — 챕터 모드에서 유형별 절이
+    사라지는 대신 항목 줄에 유형 정보를 보존한다."""
+    line = _item_line(item, text_key)
+    return f"- [{_TYPE_LABELS.get(typ, typ)}] {line[2:]}"
+
+
+def _chapter_index(raw_ts, chapters: list):
+    """timestamp가 속하는 챕터의 인덱스. 없거나·비수치거나·범위 밖이면 None(→ 기타 절)."""
+    if raw_ts is None:
+        return None
+    try:
+        ts = float(raw_ts)
+    except (TypeError, ValueError):
+        return None
+    for i, ch in enumerate(chapters):
+        if not isinstance(ch, dict):
+            continue
+        try:
+            start, end = float(ch.get("start_time")), float(ch.get("end_time"))
+        except (TypeError, ValueError):
+            continue
+        if start <= ts < end:
+            return i
+    return None
+
+
+def _render_chapter_sections(items: list, claims: list, chapters: list) -> list:
+    """"## 챕터별 지식" — 챕터를 시간순으로 돌며 knowledge_items·claims를 절에 흡수한다.
+    빈 챕터는 절을 만들지 않고, 범위 밖·timestamp 없는 항목은 "### 기타"로 모은다.
+    claims를 절에 흡수하므로 별도 "## 주장·설명" 절은 만들지 않는다."""
+    # 리뷰 F4① 가드: chapters 원소 중 dict가 아닌 것이 섞여 있어도(예: info.json 파싱
+    # 오염) 그 원소만 건너뛰고 나머지 유효한 챕터로 계속 렌더한다 — 전체 실패 금지.
+    chapters = [c for c in chapters if isinstance(c, dict)]
+    lines = ["## 챕터별 지식", ""]
+    entries = [(it, "content", it.get("type")) for it in items]
+    entries += [(c, "claim", "claim") for c in claims]
+    buckets = {i: [] for i in range(len(chapters))}
+    misc = []
+    for it, text_key, typ in entries:
+        idx = _chapter_index(it.get("timestamp"), chapters)
+        (buckets[idx] if idx is not None else misc).append((it, text_key, typ))
+    order = sorted(range(len(chapters)), key=lambda i: _safe_ts(chapters[i].get("start_time")))
+    for i in order:
+        # 리뷰 F4② 가드: 항목을 등장 순서가 아니라 timestamp 오름차순으로 정렬한다 —
+        # 실측(2026-08-19): [03:00] 절이 04:15→04:40→04:28 순서로 나오는 버그가 있었다.
+        bucket = sorted(buckets[i], key=lambda e: _safe_ts(e[0].get("timestamp")))
+        if not bucket:
+            continue
+        ch = chapters[i]
+        lines.append(f"### [{common.fmt_ts(_safe_ts(ch.get('start_time')))}] {ch.get('title', '')}")
+        for it, text_key, typ in bucket:
+            lines.append(_tagged_item_line(it, text_key, typ))
+        lines.append("")
+    if misc:
+        lines.append("### 기타")
+        for it, text_key, typ in sorted(misc, key=lambda e: _safe_ts(e[0].get("timestamp"))):
+            lines.append(_tagged_item_line(it, text_key, typ))
+        lines.append("")
+    return lines
+
+
+def _render_flat_sections(items: list, claims: list) -> list:
+    """기존(유형별) 렌더링 — chapters가 없거나 유효하지 않을 때 그대로 유지한다."""
+    lines = ["## 핵심 지식", ""]
+    rank = {t: i for i, t in enumerate(AUDIT_PRIORITY)}
+    for typ in sorted({i.get("type") for i in items}, key=lambda t: rank.get(t, 99)):
+        lines.append(f"### {_TYPE_LABELS.get(typ, typ)}")
+        for it in items:
+            if it.get("type") == typ:
+                lines.append(_item_line(it, "content"))
+        lines.append("")
+    if claims:
+        lines += ["## 주장·설명", ""]
+        for c in claims:
+            lines.append(_item_line(c, "claim"))
+        lines.append("")
+    return lines
+
+
+def render_video_md(ev: dict, cross_flags: int = 0, coverage_added: int = 0, note: str = "",
+                     chapters=None) -> str:
     v = ev.get("video") or {}
     vt = ev.get("video_type") or {}
     verify_line = (f"- **검증**: 교차 대조 flag {cross_flags}건 · 커버리지 보강 {coverage_added}건 · "
@@ -798,23 +879,13 @@ def render_video_md(ev: dict, cross_flags: int = 0, coverage_added: int = 0, not
         f"- **영상 유형**: {vt.get('primary', '?')} ({vt.get('confidence', '?')}) — {vt.get('basis', '')}",
         verify_line,
         "",
-        "## 핵심 지식",
-        "",
     ]
     items = ev.get("knowledge_items") or []
-    rank = {t: i for i, t in enumerate(AUDIT_PRIORITY)}
-    for typ in sorted({i.get("type") for i in items}, key=lambda t: rank.get(t, 99)):
-        lines.append(f"### {_TYPE_LABELS.get(typ, typ)}")
-        for it in items:
-            if it.get("type") == typ:
-                lines.append(_item_line(it, "content"))
-        lines.append("")
     claims = ev.get("claims") or []
-    if claims:
-        lines += ["## 주장·설명", ""]
-        for c in claims:
-            lines.append(_item_line(c, "claim"))
-        lines.append("")
+    if isinstance(chapters, list) and len(chapters) >= 3:
+        lines += _render_chapter_sections(items, claims, chapters)
+    else:
+        lines += _render_flat_sections(items, claims)
     lines += ["## 누락 후보", ""]
     for g in ev.get("gaps") or []:
         if isinstance(g, dict):
@@ -916,7 +987,22 @@ def main() -> int:
         if not flags:
             print("CROSSCHECK none")
     if args.render:
-        md = render_video_md(ev, args.cross_flags, args.coverage_added, args.note)
+        # info.json의 chapters를 읽어 절 구성에 쓴다. 파일 없음·키 없음·3개 미만은 조용히
+        # None(평면 렌더링) 처리하고, 파싱 자체가 실패(파손된 JSON)한 경우만 stderr에 NOTE를
+        # 남긴다 — fail-loud를 완화해 렌더링은 항상 완주시킨다(사용자 노출 traceback 금지 관례).
+        chapters = None
+        info_f = cd / "info.json"
+        if info_f.exists():
+            try:
+                info = json.loads(info_f.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+                print("NOTE: info.json 파싱 실패 — 평면 렌더링", file=sys.stderr)
+                info = None
+            if isinstance(info, dict):
+                raw_chapters = info.get("chapters")
+                if isinstance(raw_chapters, list) and len(raw_chapters) >= 3:
+                    chapters = raw_chapters
+        md = render_video_md(ev, args.cross_flags, args.coverage_added, args.note, chapters)
         out = Path(cd) / "video.md"
         out.write_text(md, encoding="utf-8", newline="\n")
         print(f"RENDERED {out}")
