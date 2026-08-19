@@ -155,3 +155,10 @@ class TestZoomLeverContract:
 
     def test_synthesize_states_duration_basis(self):
         assert "STATUS duration=" in SYNTHESIZE
+
+
+class TestKnowledgeFloorContract:
+    # 실측(2026-08-19, v0.9.0 run1): "분당 2.5건까지"는 천장일 뿐 — 모델이 40건에서 멈춤.
+    # 긴 영상 밀도는 목표·하한이 있어야 나온다
+    def test_long_video_has_floor_target(self):
+        assert "분당 1.5건 이상을 목표" in SYNTHESIZE
