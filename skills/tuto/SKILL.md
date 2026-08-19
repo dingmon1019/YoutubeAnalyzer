@@ -45,7 +45,8 @@ NOTE(yt-dlp 최신성·JS 런타임 부재)는 사용자에게 한 줄 알린다
 이것이 확대 판정이다. 네가 프레임을 보고 고르지 않는다. 선택 기준(값 밀도·지시어 큐 —
 "여기 보세요" 등)은 transcribe.md 소관이다.
 
-**3. 확대.** `zoom.py <id> --timestamps "<Z목록>"` (1024 최대 4장, 총 6장) 출력을
+**3. 확대.** `zoom.py <id> --timestamps "<Z목록>"` (1024 최대 4장·20분 초과 8장, 총
+6장·초과 12장) 출력을
 `<cache_dir>/zoom-out.txt`로 저장하고 `evidence.py "<cache_dir>" --add-frames ...`까지
 `&&` 한 호출로. 새 프레임도 너는 Read하지 않는다.
 

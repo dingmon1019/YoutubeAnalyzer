@@ -128,3 +128,13 @@ class TestConfidenceVocabularyContract:
     def test_confidence_matches_schema(self):
         assert "high|medium|low" in TRANSCRIBE
         assert "|med|" not in TRANSCRIBE
+
+
+class TestProportionalBudgetContract:
+    # 실측(2026-08-19): 고정 상한이 32분 영상 밀도를 1/3로 깎음
+    def test_zoom_scales_with_duration(self):
+        assert "20분 초과" in TRANSCRIBE   # 지도 모드: 긴 영상은 확대 6~8곳
+
+    def test_knowledge_cap_scales(self):
+        assert "최대 30건" in SYNTHESIZE   # 기존 계약 유지
+        assert "분당" in SYNTHESIZE        # 비례 조항
