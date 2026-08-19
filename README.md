@@ -11,9 +11,9 @@ Turn YouTube videos into **verified working knowledge** for AI agents — transc
 AI가 대신 영상을 보고, 자막과 화면을 함께 이해하고, 검증된 지식으로 변환합니다.
 이후 AI는 그 내용을 설명하거나 질문에 답하고, 현재 작업과 비교하거나 튜토리얼을 따라 할 수 있습니다.
 
-[![Version](https://img.shields.io/badge/version-0.8.0-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
+[![Version](https://img.shields.io/badge/version-0.9.1-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-285%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-306%20passed-brightgreen.svg)](tests/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://claude.com/claude-code)
 [![Languages](https://img.shields.io/badge/video-KO%20%7C%20EN-orange.svg)](#)
 
@@ -195,7 +195,7 @@ No API key is required. Transcript acquisition falls back through native caption
 
 ## What you get
 
-`video.md`의 구조는 영상에 따라 달라집니다. 튜토리얼이면 절차 중심, 강의면 개념 중심으로 조직됩니다. 아래는 튜토리얼 예시입니다.
+`video.md`의 구조는 영상에 따라 달라집니다. 튜토리얼이면 절차 중심, 강의면 개념 중심으로 조직됩니다. 유튜브 챕터가 **3개 이상**이면 영상 길이와 무관하게 시간순 챕터 절(`### [MM:SS] 챕터 제목`)로 구성되고, 그렇지 않으면 아래처럼 기존 유형별 구성을 따릅니다.
 
 ```markdown
 ## Step 4: Run installer—Add Python to PATH + Install Now (02:56–04:05)
@@ -241,7 +241,7 @@ Read하지 않음) 실측: 11분 27초 한국어 튜토리얼 1편, sonnet 세�
 | **Download + analysis** | **8.1× faster** | 154s → 19s |
 | **Zoom extraction** | **5.4× faster** | 327s → 61s |
 | **Audit escalation** | **0%** | On the selected audit model |
-| **Tests** | **285 passing** | Current regression suite (`python -m pytest tests/ -q`) |
+| **Tests** | **306 passing** | Current regression suite (`python -m pytest tests/ -q`) |
 
 **Why total cost falls less than `cache_write`:** `cache_read` scales with how much conversation
 already precedes the run, not with the pipeline. Between the two measurements above it went
@@ -264,6 +264,18 @@ flag, and the coverage audit form a three-layer net that catches some but not al
 measured run, cross-check flagged a `100`↔`200` value disagreement and a recheck subagent corrected
 it before `video.md` was written. That is partial defense, not a fix: sample audits remain unrun
 (see [Limitations](#limitations)). Full numbers: [`docs/eval/reports/2026-08-18-function-agents.md`](docs/eval/reports/2026-08-18-function-agents.md).
+
+**v0.9.1 density recovery, measured (same 32-minute video, before/after).** The fixed per-run
+budgets above worked well at 11 minutes but quietly starved longer videos: the same 32-minute
+tutorial (`tkkbYCajCjM`, 32:22) came out at **33 knowledge items (0.9/min)** under the old flat
+caps. Making the map, zoom, and knowledge budgets scale with duration (see
+[Duration-proportional budgets](#6-duration-proportional-budgets)) brought the same video to
+**76 items (2.35/min)** — back in range with the 11-minute baseline (2.7/min) — with unobserved
+gaps down from **15 to 0** and `video.md` rendering as **24 chapter sections**. Cost came out to
+**$3.77** (**$0.117/min**, cheaper per minute than the 11-minute video's ~$0.14/min) — **$0.0496
+per knowledge item**, under the $0.05 reference target. The 11-minute baseline is unchanged by this
+work ($1.55–1.65, 30–36 knowledge items). Full numbers:
+[`docs/eval/reports/2026-08-19-long-video.md`](docs/eval/reports/2026-08-19-long-video.md).
 
 See [`docs/eval/`](docs/eval/) for the evaluation protocol and cost-accounting tool.
 
@@ -302,7 +314,7 @@ Uniform sampling and scene-change detection can skip static screens—exactly wh
 
 ### 2. Resolution tiering
 
-Text-heavy frames such as slides, tables, menus, and terminals are extracted at **1024px**; illustrations, transitions, and talking heads use **512px**. Zoom points chosen without map coverage should be requested at 1024px (see SKILL §2). `zoom.py` itself will not process more than 20 high-resolution frames or 60 total frames per call. The orchestrator makes a **single** `zoom.py` call per analysis and keeps it far under that ceiling — a self-imposed budget of 4 high-resolution frames and 6 total, plus at most one `--crop` follow-up.
+Text-heavy frames such as slides, tables, menus, and terminals are extracted at **1024px**; illustrations, transitions, and talking heads use **512px**. Zoom points chosen without map coverage should be requested at 1024px (see SKILL §2). `zoom.py` itself will not process more than 20 high-resolution frames or 60 total frames per call. The orchestrator makes a **single** `zoom.py` call per analysis and keeps it far under that ceiling — a self-imposed budget that now scales with video duration (see [Duration-proportional budgets](#6-duration-proportional-budgets) below), plus at most one `--crop` follow-up.
 
 ### 3. Gap detection
 
@@ -312,7 +324,7 @@ Low-motion verification sections near the end of tutorials are easy for samplers
 
 Per-claim adversarial sample audits — a fresh agent independently trying to refute a sampled subset of claims — were removed in v0.5.0: 표본 감사는 v0.5.0에서 제거됐다(실측: 4편 24건 판정 수정 0건) — 커버리지 감사(haiku)와 결정론적 교차 대조가 검증을 담당한다.
 
-`evidence.py --cross-check` re-reads hashed and numeric values across `visual_evidence`, `claims`, and `knowledge_items` looking for internal disagreement — at **zero additional cost**, since it is deterministic post-processing rather than a subagent call. Frames it flags are re-read once by a disposable vision subagent (`haiku`) and the value is corrected via `merge` before `video.md` is written — this recheck path has caught real errors in measurement (a `100`↔`200` value disagreement, corrected before render).
+`evidence.py --cross-check` re-reads hashed and numeric values across `visual_evidence`, `claims`, and `knowledge_items` looking for internal disagreement — at **zero additional cost**, since it is deterministic post-processing rather than a subagent call. Frames it flags are re-read once by a disposable vision subagent (`haiku`) and the value is corrected via `merge` before `video.md` is written — this recheck path has caught real errors in measurement: an 11-minute video's `100`↔`200` value disagreement, corrected before render; on a 32-minute video, cross-check flagged 9 disagreements, of which 1 was a real misread (`108.00`↔`105.00` KiB/s, corrected) and 8 confirmed the value was already accurate.
 
 Cross-check cannot catch a reading that is wrong but internally *consistent* — a value nobody disagreed with is not the same as a value someone independently verified. That gap is why `verification.status` defaults to, and effectively stays at, `unaudited` (see [Limitations](#limitations)).
 
@@ -323,6 +335,25 @@ Coverage audit builds an **expected knowledge checklist** from the source and co
 An adaptive `video.md` heading like `## Phase 1` says nothing about what it contains, and `evidence.json` is the canonical source anyway. So completeness is checked as `source → evidence` first, and `evidence → video.md` second.
 
 It is the pipeline's **only** subagent call, and it runs on `haiku`: it receives `evidence.py --coverage-input` (a digest of `claims`/`knowledge_items`) plus the `pass1-report.txt` transcript — **text only, image reads are explicitly forbidden in its prompt.** It is asked what a viewer of the transcript would expect to know that the digest does not already contain, not asked to re-derive values from frames. Candidates it returns are checked against the transcript before being merged in — coverage audit proposes gaps, it does not write them unconfirmed.
+
+### 6. Duration-proportional budgets
+
+Fixed per-run ceilings quietly starved long videos: a 32-minute tutorial measured against the same
+map-frame and knowledge caps as the 11-minute regression baseline came out at roughly a third of
+the knowledge density (0.9 items/min vs. 2.7). Budgets now scale with video length instead of a
+flat number:
+
+| Resource | ≤20 min | 20 min+ |
+|---|---|---|
+| Map frames | 0.7/min (unchanged) | 1.0/min, capped at 34 |
+| Zoom targets | up to 4 | 6–8 |
+| Knowledge items | up to 30 (unchanged) | 2.5/min ceiling, 1.5/min floor target |
+
+**A ceiling alone did not raise density.** Allowing up to 2.5 knowledge items/min still left the
+model stopping at 40 items on a 32-minute video — a ceiling caps runaway extraction, it does not
+tell the model to keep extracting. Adding an explicit **1.5 items/min floor as a target** moved the
+same video to 76 items (2.35/min) on the next run. See [Measured results](#measured-results) for
+the full before/after.
 
 ---
 
@@ -351,6 +382,7 @@ Every round had to demonstrate no quality regression or be rolled back.
 | **R5** | Cut subagent call counts (parallel reads, single write, fewer crop/audit rounds); measured whether sample audits earn their cost | Builder cost **−49%** (41 → 16 calls); total cost **−10.4%** (orchestrator cost grew **+56%**, absorbing most of the builder win); sample audit fixed at 3 items after injected-error testing showed no detection-power loss vs. 6 |
 | **R6 (solo)** | Removed delegation entirely — the orchestrator runs MAP through CROSS-CHECK itself instead of handing frame-reading and document-writing to separate agents; removed sample audits, leaving deterministic cross-check plus a single `haiku` coverage-audit call as the only verification | Sample audits corrected **0 / 24** verdicts across 4 videos before removal — basis for cutting them; solo cost/time: **$2.91 · 12.1 min (opus session, measured 2026-08-18; $1.5 target missed, accepted)** — see [Measured results](#measured-results) |
 | **R7 (function-agents, v0.8.0)** | Went the opposite direction from solo — split the single context back into disposable subagents, but this time the orchestrator itself never reads a frame: two `haiku` vision passes read map/zoom frames and vanish, a text-only `sonnet` pass synthesizes knowledge, `haiku` audits coverage, thinking capped to 0 across the whole run | Converged at **$1.55~1.65** (`sonnet` session, `MAX_THINKING_TOKENS=0`), api time **4~5 min** — solo ($2.91) 대비 **-45%**; knowledge 30~36 items, hallucinations 0. Cost gate (≤$1.5) missed by **+3~10%** but accepted by the user; misread gate (0) also missed — **~1 command-spelling misread per video** persisted (small on-screen text) and was accepted as a known limitation — see [Measured results](#measured-results) and [`docs/eval/reports/2026-08-18-function-agents.md`](docs/eval/reports/2026-08-18-function-agents.md) |
+| **R8 (long-video, v0.9.1)** | Fixed per-run caps were starving videos over 20 minutes — made map, zoom, and knowledge budgets scale with duration instead of a flat number, and made `video.md` render as chronological chapter sections when the source has 3+ chapters, regardless of video length | Same 32-minute video: knowledge **33 → 76 items** (0.9 → 2.35/min, back in range with the 11-minute baseline), gaps **15 → 0**, **24 chapter sections**; cost **$3.77** (+7.7% over the $3.50 gate, but cheaper per minute than the 11-minute video); 11-minute baseline unchanged — see [Measured results](#measured-results) and [`docs/eval/reports/2026-08-19-long-video.md`](docs/eval/reports/2026-08-19-long-video.md) |
 
 <details>
 <summary><b>Lessons worth keeping</b></summary>
@@ -401,8 +433,10 @@ See [`docs/eval/golden-set-protocol.md`](docs/eval/golden-set-protocol.md).
 - Developed and validated on Windows. macOS/Linux are not yet fully validated.
 - 산출물은 근거 추적은 되나 표본 감사를 거치지 않는다 — 값은 프레임으로 재확인 가능하다.
 - 작은 화면 글자(축약 명령어·설정 키 등)는 비전 서브에이전트가 오독할 수 있다 — 영상당 약 1건
-  발생 가능. 교차 대조·`⚠️` 표기·커버리지 감사 3중 안전망이 부분적으로 방어하지만(실측: 교차
-  대조가 `100`↔`200` 오독 1건을 재확인으로 정정) 완전히 막지는 못한다.
+  발생 가능. 교차 대조·`⚠️` 표기·커버리지 감사 3중 안전망이 부분적으로 방어하지만(실측: 11분
+  영상에서 교차 대조가 `100`↔`200` 오독 1건을 재확인으로 정정, 32분 영상에서는 flag 9건 중
+  1건이 실제 오독으로 판정돼 정정됨 — `108`→`105` KiB/s, 나머지 8건은 정확 확인) 완전히
+  막지는 못한다.
 
 ---
 
@@ -454,6 +488,6 @@ If a tutorial breaks `tuto`, a public video URL and the missed timestamp are esp
 
 **If tuto saves you from scrubbing a video frame by frame, consider giving the repo a ⭐.**
 
-<sub>Built as a Claude Code plugin · 285 tests passing</sub>
+<sub>Built as a Claude Code plugin · 306 tests passing</sub>
 
 </div>
