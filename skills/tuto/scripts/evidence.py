@@ -18,6 +18,7 @@
 """
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -910,8 +911,10 @@ def _activity_peak_points(s: float, e: float, curve) -> list:
     반환값이 None이면 호출부가 중점/삼분점 폴백을 쓴다(curve 부재 또는 구간 내 전부 0)."""
     if not curve:
         return None
-    lo = int(s) + _GAP_PLAN_MARGIN
-    hi = int(e) - _GAP_PLAN_MARGIN
+    # ceil/floor로 양방향 정확히 margin초 이상 확보한다 — gaps는 LLM 원문 float라
+    # 소수초가 실재하므로(리뷰 F1) int() 절삭은 시작 쪽 여유를 3초 미만으로 만들 수 있다.
+    lo = math.ceil(s + _GAP_PLAN_MARGIN)
+    hi = math.floor(e - _GAP_PLAN_MARGIN)
     if hi < lo:
         return None
     n = len(curve)
@@ -1104,8 +1107,10 @@ def main() -> int:
             curve = sig.get("activity", {}).get("curve")
             if isinstance(curve, list):
                 activity_curve = curve
-        except (OSError, json.JSONDecodeError, AttributeError):
-            pass  # signals.json은 선택 입력이다 — 없거나 깨져도 중점/삼분점 폴백으로 조용히 진행
+        except (OSError, ValueError, AttributeError):
+            # signals.json은 선택 입력이다 — 없거나 깨져도(JSONDecodeError·인코딩 손상에
+            # 의한 UnicodeDecodeError 모두 ValueError 하위 클래스) 조용히 폴백한다(리뷰 F2).
+            pass
         specs = gap_zoom_plan(ev, activity_curve=activity_curve)
         if specs:
             print(",".join(specs))

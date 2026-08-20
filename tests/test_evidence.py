@@ -1285,6 +1285,25 @@ class TestGapZoomPlanActivity:
         curve = self._curve(200, {61: 99.0, 120: 50.0})
         assert evidence.gap_zoom_plan(ev, activity_curve=curve) == ["02:00@1024"]
 
+    def test_fractional_gap_margin_uses_ceil_floor(self):
+        """리뷰 F1: 공백 경계가 소수초(100.5~200.5)면 int(s)+3은 실제 여유가 3초 미만인
+        지점을 통과시킨다. @103(99)은 시작에서 2.5초(103-100.5)뿐이라 마진 미달로
+        제외되어야 하고, @150(50)이 선택돼야 한다."""
+        ev = {"gaps": [{"start": 100.5, "end": 200.5, "reason": "x"}]}
+        curve = self._curve(250, {103: 99.0, 150: 50.0})
+        assert evidence.gap_zoom_plan(ev, activity_curve=curve) == ["02:30@1024"]
+
+
+def test_gap_plan_falls_back_on_encoding_corrupt_signals_json(tmp_path):
+    """리뷰 F2: signals.json이 UTF-8로 디코드 불가능(UnicodeDecodeError)해도 크래시
+    없이 레거시 중점/삼분점 폴백으로 조용히 진행한다 — exit 0, stderr 비어 있음."""
+    evidence.save(tmp_path, {"gaps": [{"start": 60.0, "end": 160.0, "reason": "x"}]})
+    (tmp_path / "signals.json").write_bytes(b"\xff\xfe\x00\x01broken-not-utf8")
+    p = _run([str(tmp_path), "--gap-plan"])
+    assert p.returncode == 0
+    assert p.stderr == ""
+    assert p.stdout.strip() == "01:50@1024"
+
 
 def test_gap_plan_alone_is_fail_soft_when_evidence_missing(tmp_path):
     """--gap-plan만 단독 요청됐을 때 evidence.json 부재는 fail-soft(NOTE + exit 0)로
