@@ -162,3 +162,10 @@ class TestKnowledgeFloorContract:
     # 긴 영상 밀도는 목표·하한이 있어야 나온다
     def test_long_video_has_floor_target(self):
         assert "분당 1.5건 이상을 목표" in SYNTHESIZE
+
+
+class TestBlindTranscribeContract:
+    # 실측(2026-08-19): 자막 문맥이 날조의 재료 — CORS 화면에서 main.py 20줄을 지어냄
+    def test_blind_mode_no_transcript(self):
+        assert "자막 경로가 주어지지 않으면" in TRANSCRIBE
+        assert "찾지 마라" in TRANSCRIBE
