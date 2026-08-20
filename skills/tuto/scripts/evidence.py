@@ -899,17 +899,58 @@ def render_video_md(ev: dict, cross_flags: int = 0, coverage_added: int = 0, not
     return "\n".join(lines)
 
 
-def gap_zoom_plan(ev: dict, max_frames: int = 16) -> list:
+_GAP_PLAN_MARGIN = 3        # 공백 경계 근접 지점은 화면이 아직 전환 중일 확률이 높아 제외
+_GAP_PLAN_MIN_SEPARATION = 45  # 두 확대 지점이 같은 화면을 중복 촬영하지 않도록 강제하는 최소 간격
+
+
+def _activity_peak_points(s: float, e: float, curve) -> list:
+    """curve에서 (s+margin, e-margin) 구간의 최대값 지점을 고른다.
+
+    180초 미만 공백은 top-1, 이상은 top-2(45초 미만 간격은 차순위 후보로 대체).
+    반환값이 None이면 호출부가 중점/삼분점 폴백을 쓴다(curve 부재 또는 구간 내 전부 0)."""
+    if not curve:
+        return None
+    lo = int(s) + _GAP_PLAN_MARGIN
+    hi = int(e) - _GAP_PLAN_MARGIN
+    if hi < lo:
+        return None
+    n = len(curve)
+    candidates = []
+    for sec in range(lo, hi + 1):
+        idx = max(0, min(n - 1, sec))  # 곡선 길이가 공백 범위보다 짧아도 인덱스 초과 방지
+        val = curve[idx]
+        if val > 0:
+            candidates.append((val, sec))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: (-t[0], t[1]))
+    want = 1 if (e - s) < 180 else 2
+    chosen = []
+    for _val, sec in candidates:
+        if all(abs(sec - c) >= _GAP_PLAN_MIN_SEPARATION for c in chosen):
+            chosen.append(sec)
+        if len(chosen) >= want:
+            break
+    return sorted(float(c) for c in chosen)
+
+
+def gap_zoom_plan(ev: dict, max_frames: int = 16, activity_curve: list = None) -> list:
     """G 구간의 확대 지점을 결정론적으로 산출한다 — LLM 비용 0.
 
-    180초 미만 공백은 중점 1개, 이상은 1/3·2/3 지점 2개. 상한 초과 시 긴 공백 우선.
-    (실측 2026-08-19: 50분 영상 공백 16구간에 화면 전용 치명 정보 3건 실재)"""
+    activity_curve(초당 1점 float 리스트, 인덱스=초)가 주어지면 각 공백의 화면 변화 피크를
+    조준한다(_activity_peak_points 참고). curve가 없거나 구간 내 값이 전부 0이면 기존
+    중점/삼분점 폴백: 180초 미만 공백은 중점 1개, 이상은 1/3·2/3 지점 2개.
+    상한 초과 시 긴 공백 우선.
+    (실측 2026-08-19: 50분 영상 공백 16구간에 화면 전용 치명 정보 3건 실재)
+    (실측 2026-08-19b: 중점/삼분점 샘플 회수 1.5/3 — activity 피크로 명중률 개선, Task 4)"""
     gaps = [g for g in (ev.get("gaps") or []) if isinstance(g, dict)]
     gaps.sort(key=lambda g: float(g.get("end", 0)) - float(g.get("start", 0)), reverse=True)
     specs = []
     for g in gaps:
         s, e = float(g.get("start", 0)), float(g.get("end", 0))
-        pts = [(s + e) / 2] if e - s < 180 else [s + (e - s) / 3, s + 2 * (e - s) / 3]
+        pts = _activity_peak_points(s, e, activity_curve)
+        if pts is None:
+            pts = [(s + e) / 2] if e - s < 180 else [s + (e - s) / 3, s + 2 * (e - s) / 3]
         for p in pts:
             specs.append(f"{int(p // 60):02d}:{int(p % 60):02d}@1024")
     return specs[:max_frames]
@@ -1057,7 +1098,15 @@ def main() -> int:
             refs = " ".join(f"{e.get('source')}:{e.get('ref')}" for e in c["evidence"])
             print(f"{c['id']}	{c['kind']}	{c['type']}	{refs}	{c['content']}")
     if args.gap_plan:
-        specs = gap_zoom_plan(ev)
+        activity_curve = None
+        try:
+            sig = json.loads((cd / "signals.json").read_text(encoding="utf-8"))
+            curve = sig.get("activity", {}).get("curve")
+            if isinstance(curve, list):
+                activity_curve = curve
+        except (OSError, json.JSONDecodeError, AttributeError):
+            pass  # signals.json은 선택 입력이다 — 없거나 깨져도 중점/삼분점 폴백으로 조용히 진행
+        specs = gap_zoom_plan(ev, activity_curve=activity_curve)
         if specs:
             print(",".join(specs))
     if args.validate:

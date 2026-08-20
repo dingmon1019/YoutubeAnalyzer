@@ -1251,6 +1251,41 @@ class TestGapZoomPlan:
         assert evidence.gap_zoom_plan(self._ev(["산문 노트"])) == []
 
 
+class TestGapZoomPlanActivity:
+    def _curve(self, length, peaks):
+        c = [0.0] * length
+        for sec, val in peaks.items():
+            c[sec] = val
+        return c
+
+    def test_peak_beats_midpoint(self):
+        # 공백 60~160, 피크 @150(값 90) → 중점 01:50이 아니라 02:30
+        ev = {"gaps": [{"start": 60.0, "end": 160.0, "reason": "x"}]}
+        curve = self._curve(200, {150: 90.0, 110: 10.0})
+        assert evidence.gap_zoom_plan(ev, activity_curve=curve) == ["02:30@1024"]
+
+    def test_long_gap_two_peaks_with_separation(self):
+        # 공백 0~300, 피크 @100(90)·@110(80)·@250(70) → 110은 100과 45초 미만이라 250 선택
+        ev = {"gaps": [{"start": 0.0, "end": 300.0, "reason": "x"}]}
+        curve = self._curve(400, {100: 90.0, 110: 80.0, 250: 70.0})
+        specs = evidence.gap_zoom_plan(ev, activity_curve=curve)
+        assert sorted(specs) == ["01:40@1024", "04:10@1024"]
+
+    def test_zero_curve_falls_back_to_midpoint(self):
+        ev = {"gaps": [{"start": 60.0, "end": 160.0, "reason": "x"}]}
+        assert evidence.gap_zoom_plan(ev, activity_curve=[0.0] * 200) == ["01:50@1024"]
+
+    def test_none_curve_keeps_legacy(self):
+        ev = {"gaps": [{"start": 0.0, "end": 300.0, "reason": "x"}]}
+        assert evidence.gap_zoom_plan(ev, activity_curve=None) == ["01:40@1024", "03:20@1024"]
+
+    def test_margin_excludes_gap_edges(self):
+        # 경계 3초 이내 피크는 제외 — 공백 60~160, 피크 @61(99)은 무시하고 @120(50) 선택
+        ev = {"gaps": [{"start": 60.0, "end": 160.0, "reason": "x"}]}
+        curve = self._curve(200, {61: 99.0, 120: 50.0})
+        assert evidence.gap_zoom_plan(ev, activity_curve=curve) == ["02:00@1024"]
+
+
 def test_gap_plan_alone_is_fail_soft_when_evidence_missing(tmp_path):
     """--gap-plan만 단독 요청됐을 때 evidence.json 부재는 fail-soft(NOTE + exit 0)로
     처리한다 — 보강은 선택 단계라 파이프라인을 끊지 않는다."""
