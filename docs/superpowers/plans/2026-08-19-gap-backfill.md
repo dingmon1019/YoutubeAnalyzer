@@ -125,3 +125,56 @@ class TestBlindTranscribeContract:
 - [ ] v0.10.0 선범프·배포 → `~/.yta/cache/b0HMimUb4f0` → `-v091`로 개명 보존 → 빈 디렉토리에서 헤드리스 재실행(sonnet·MAX_THINKING_TOKENS=0).
 - [ ] 게이트: ① **실재 치명 3건 회수** — 프론트 Dockerfile(FROM nginx:1.27.0·RUN rm -rf·COPY static)·mongo .env 키 2줄·docker exec `/bin/bash`가 evidence에 등재됐는가(v091 산출물엔 없음이 확인된 항목들) ② **날조 0** — 보강으로 추가된 K/V 중 무작위 3건의 근거 프레임을 컨트롤러(fable)가 직접 열어 대조 ③ 비용 ≤ $4.2 (v0.9.1 $3.45 + 예산 $0.75) ④ 짧은 영상 불변(테스트 보장) ⑤ 11분 영상 회귀 재실측 생략(발동 조건 미충족이 테스트로 보장되므로).
 - [ ] 결과 보고 — 병합·README는 사용자 판정 후.
+
+---
+
+### Task 4: activity 피크 표적 (실측 후 개선 — 사용자 승인 A)
+
+**동기 (Task 3 실측):** 중점/삼분점 샘플은 복권 — 회수 1.5/3. signals.json의 `activity.curve`(초당 1점 float 리스트, 인덱스=초)로 공백 내 화면 변화 피크를 찍으면 같은 프레임 수로 명중률이 오른다.
+
+**Files:**
+- Modify: `skills/tuto/scripts/evidence.py` — `gap_zoom_plan()` 확장 + `--gap-plan` CLI가 signals.json 로드
+- Test: `tests/test_evidence.py` append
+
+**Interfaces:**
+- Produces: `gap_zoom_plan(ev, max_frames=16, activity_curve=None)` — curve가 있으면 각 공백 내 `(start+3, end-3)` 범위에서 curve 값 최대 초를 선택: <180초 공백은 top-1, ≥180초는 top-2(두 지점 간 최소 45초 간격 강제 — 간격 미달이면 차순위로). 범위 내 curve가 전부 0이거나 curve가 None이면 기존 중점/삼분점 폴백. 출력 형식·상한·긴 공백 우선 정렬은 기존 그대로. CLI는 `<cache_dir>/signals.json`의 `["activity"]["curve"]`를 읽어 전달(파일·키 부재 시 None — 폴백 경로, fail-soft).
+
+- [ ] **Step 1: 실패 테스트 append**:
+
+```python
+class TestGapZoomPlanActivity:
+    def _curve(self, length, peaks):
+        c = [0.0] * length
+        for sec, val in peaks.items():
+            c[sec] = val
+        return c
+    def test_peak_beats_midpoint(self):
+        # 공백 60~160, 피크 @150(값 90) → 중점 01:50이 아니라 02:30
+        ev = {"gaps": [{"start": 60.0, "end": 160.0, "reason": "x"}]}
+        curve = self._curve(200, {150: 90.0, 110: 10.0})
+        assert gap_zoom_plan(ev, activity_curve=curve) == ["02:30@1024"]
+    def test_long_gap_two_peaks_with_separation(self):
+        # 공백 0~300, 피크 @100(90)·@110(80)·@250(70) → 110은 100과 45초 미만이라 250 선택
+        ev = {"gaps": [{"start": 0.0, "end": 300.0, "reason": "x"}]}
+        curve = self._curve(400, {100: 90.0, 110: 80.0, 250: 70.0})
+        specs = gap_zoom_plan(ev, activity_curve=curve)
+        assert sorted(specs) == ["01:40@1024", "04:10@1024"]
+    def test_zero_curve_falls_back_to_midpoint(self):
+        ev = {"gaps": [{"start": 60.0, "end": 160.0, "reason": "x"}]}
+        assert gap_zoom_plan(ev, activity_curve=[0.0] * 200) == ["01:50@1024"]
+    def test_none_curve_keeps_legacy(self):
+        ev = {"gaps": [{"start": 0.0, "end": 300.0, "reason": "x"}]}
+        assert gap_zoom_plan(ev, activity_curve=None) == ["01:40@1024", "03:20@1024"]
+    def test_margin_excludes_gap_edges(self):
+        # 경계 3초 이내 피크는 제외 — 공백 60~160, 피크 @61(99)은 무시하고 @120(50) 선택
+        ev = {"gaps": [{"start": 60.0, "end": 160.0, "reason": "x"}]}
+        curve = self._curve(200, {61: 99.0, 120: 50.0})
+        assert gap_zoom_plan(ev, activity_curve=curve) == ["02:00@1024"]
+```
+
+- [ ] **Step 2: 실패 확인** (test_none_curve_keeps_legacy는 기존 동작이라 처음부터 PASS여야 한다).
+- [ ] **Step 3: 구현** — 기존 함수 확장(시그니처 하위호환: 기본값 None). CLI에서 signals.json 로드는 try/except로 fail-soft(stderr NOTE 없이 조용히 폴백 — 신호는 선택 입력이다). 곡선 인덱스 범위 초과 방어(`min(len(curve)-1, ...)`).
+- [ ] **Step 4: 전체 스위트 PASS + 실캐시 검증(L3)** — `b0HMimUb4f0-v0100-gb` 캐시로 `--gap-plan` 실행해 이전(중점) 출력과 달라진 지점 목록을 보고서에 기록.
+- [ ] **Step 5: Commit** — `feat(evidence): gap-plan activity 피크 표적 — 중점 복권을 조준 사격으로`
+
+### Task 5: 재실측 (컨트롤러) — v0.10.1 배포 후 50분 영상 1회, 게이트: 표적 ≥2/3 완전 회수·날조 0(fable 프레임 대조)·비용 ≤$5.5(전회 이하)·G ≤8 유지.
