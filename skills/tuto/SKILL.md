@@ -85,11 +85,12 @@ n>0이면 `--from-lines coverage.lines`로 반영한다(1회 한정) — exit 2�
 `--note "커버리지 감사 생략 — 자막 없음"`.
 
 **7.5. 공백 표적 보강 (영상 20분 초과 시에만).** `evidence.py "<cache_dir>" --gap-plan`
-실행 — 출력이 비면 이 단계를 건너뛴다. 출력이 있으면: ① `zoom.py <id> --timestamps
-"<출력>"` → `<cache_dir>/gap-frames.txt` && `--add-frames` ② **blind 전사(haiku)**:
-transcribe.md 보강 모드로 gap-frames.txt 경로만 주고 **자막 경로는 주지 않는다**(날조
-차단 — 실측 근거) — 프레임 12장 초과면 두 번에 나눠 디스패치, 출력
-`<cache_dir>/gap.lines`(2회면 gap2.lines) ③ 보강 합성(sonnet): synthesize.md 보강
+실행 — 출력이 비면 이 단계를 건너뛴다(20분 이하 영상은 코드가 무조건 빈 출력을 낸다).
+공백 프레임 최대 12장 — 초과분은 긴 공백 우선으로 잘린다. 출력이 있으면: ①
+`zoom.py <id> --timestamps "<출력>"` → `<cache_dir>/gap-frames.txt` && `--add-frames`
+② **blind 전사(haiku)**: transcribe.md 보강 모드로 gap-frames.txt 경로만 주고
+**자막 경로는 주지 않는다**(날조 차단 — 실측 근거) — 프레임은 12장 이하라 한 번에
+디스패치한다, 출력 `<cache_dir>/gap.lines` ③ 보강 합성(sonnet): synthesize.md 보강
 모드로 coverage-digest.txt + gap.lines(분할했으면 gap2.lines까지 전부)를 주고
 `<cache_dir>/gapfill.lines` 작성 ④ `--from-lines gapfill.lines`(1회, exit 2면
 INVALID 1회 재전달) ⑤ 보강 건수를 8단계 `--note "공백 보강 n건"`으로 명시(실패 시

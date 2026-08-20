@@ -906,7 +906,21 @@ _GAP_PLAN_MIN_SEPARATION = 45  # 두 확대 지점이 같은 화면을 중복 �
 # 맞물려 거의 모든 구간을 공백으로 판정한다 — 50분 영상 보강 16장(+$2), 32분 영상도
 # 13장 발동 예상. 90초로 올리면 50분 11장·32분 5장으로 줄고, 실측에서 표적이 들었던
 # 공백(99초·140초·237초)은 전부 생존한다 — 정보 유실 위험 없이 한계 비용만 깎는 조정.
+# 최종 리뷰 정정(2026-08-20, F2): 위 "16→11"은 보강 프레임이 이미 등록된 캐시를
+# 재실행한 결과라 map+zoom 타임스탬프가 부풀어 있었다(오염). 신선 실행 형상(캐시
+# 없이 처음부터)에서 재실측하면 임계 60초든 90초든 공백 개수 자체가 max_frames
+# 상한(16)보다 많아 두 임계 모두 상한에 묶인 동일 출력을 낸다 — 임계 상향의 비용
+# 절감 효과는 32분급처럼 공백 수가 상한 아래로 떨어지는 영상에서만 유효했다.
+# 실제 비용 레버는 임계가 아니라 max_frames 상한이다 — gap_zoom_plan에서 16→12로
+# 낮춘다(90초 임계 자체는 유지 — 32분급 억제 효과는 실재한다).
 GAP_BACKFILL_THRESHOLD = 90.0
+
+# 짧은 영상은 공백 보강의 비용 대비 회수 이득이 낮다는 것이 Task 3/5 실측(50분·32분
+# 대상 설계)의 전제였다. 하지만 이 전제는 SKILL.md 7.5절 산문("영상 20분 초과 시에만")
+# 으로만 지켜지고 있었다 — 최종 리뷰 실측: 11분급(687초) 영상 형상에서도 --gap-plan이
+# 1~4개 지점을 출력했다(트리거가 산문 준수 여부에 달린 복불복). 짧은 영상 비용 불변
+# 원칙을 코드로 강제한다(리뷰 F1).
+GAP_BACKFILL_MIN_DURATION = 1200.0  # 20분
 
 
 def _activity_peak_points(s: float, e: float, curve) -> list:
@@ -952,7 +966,12 @@ def _frame_gap_source(ev: dict) -> list:
     입력에서 항상 같은 결과가 나온다(같은 캐시 실측: LLM 기록 0건 vs 이 계산 27구간).
 
     ev["gaps"](정직 보고용 G 레코드, video.md 누락 후보 절이 그대로 쓴다)는 이 계산과
-    무관하다 — 더 이상 gap_zoom_plan의 입력이 아니다."""
+    무관하다 — 더 이상 gap_zoom_plan의 입력이 아니다.
+
+    duration <= GAP_BACKFILL_MIN_DURATION(20분)이면 공백이 아무리 커도 빈 리스트를
+    반환한다(리뷰 F1) — 짧은 영상은 애초에 보강 대상이 아니다. duration이 비수치
+    (손상된 메타데이터)여서 게이트를 판정할 수 없을 때도 크래시 대신 빈 리스트로
+    안전하게 처리한다(비용 불변 원칙: 판정 불가 시 기본값은 "보강 없음")."""
     fr = (ev.get("provenance") or {}).get("frames") or {}
     ts = set()
     for bucket in ("map", "zoom"):
@@ -967,11 +986,16 @@ def _frame_gap_source(ev: dict) -> list:
             except (TypeError, ValueError):
                 continue
     ordered = sorted(ts)
-    duration = float((ev.get("video") or {}).get("duration") or 0)
+    try:
+        duration = float((ev.get("video") or {}).get("duration") or 0)
+    except (TypeError, ValueError):
+        return []
     if duration <= 0:
         # video.duration이 없거나 0이면 마지막 프레임 타임스탬프로 방어한다 —
         # 그마저 없으면(프레임이 하나도 없음) 0.0으로 남아 pts=[0.0, 0.0], 공백 없음.
         duration = ordered[-1] if ordered else 0.0
+    if duration <= GAP_BACKFILL_MIN_DURATION:
+        return []
     pts = [0.0] + ordered
     # 리뷰 F2: duration은 마지막 프레임 t보다 클 때만 끝점으로 붙인다. 무조건 뒤에
     # 붙이면 duration이 실제보다 작게 기록된(메타데이터 역전) 경우 pts가
@@ -983,7 +1007,7 @@ def _frame_gap_source(ev: dict) -> list:
     return [{"start": a, "end": b} for a, b in zip(pts, pts[1:]) if b - a > GAP_BACKFILL_THRESHOLD]
 
 
-def gap_zoom_plan(ev: dict, max_frames: int = 16, activity_curve: list = None) -> list:
+def gap_zoom_plan(ev: dict, max_frames: int = 12, activity_curve: list = None) -> list:
     """공백 구간의 확대 지점을 결정론적으로 산출한다 — LLM 비용 0.
 
     공백 자체도 결정론이다(_frame_gap_source: 프레임 타임스탬프 기반, ev["gaps"]는 더 이상
@@ -994,7 +1018,13 @@ def gap_zoom_plan(ev: dict, max_frames: int = 16, activity_curve: list = None) -
     중점/삼분점 폴백: 180초 미만 공백은 중점 1개, 이상은 1/3·2/3 지점 2개.
     상한 초과 시 긴 공백 우선.
     (실측 2026-08-19: 50분 영상 공백 16구간에 화면 전용 치명 정보 3건 실재)
-    (실측 2026-08-19b: 중점/삼분점 샘플 회수 1.5/3 — activity 피크로 명중률 개선, Task 4)"""
+    (실측 2026-08-19b: 중점/삼분점 샘플 회수 1.5/3 — activity 피크로 명중률 개선, Task 4)
+
+    최종 리뷰 정정(2026-08-20, F2): max_frames 기본값을 16→12로 낮춘다. 신선 실행
+    형상 실측에서는 GAP_BACKFILL_THRESHOLD(임계)가 아니라 이 상한이 비용을 지배한다
+    (위 GAP_BACKFILL_THRESHOLD 주석 참고, Task 7의 "16→11" 주장은 오염된 캐시 기준).
+    12장이면 SKILL.md 7.5②의 blind 전사 디스패치 배치 상한(12장)과 정확히 맞아떨어져
+    분할(2회 디스패치, gap2.lines)이 항상 필요 없어진다 — 디스패치 1개가 통째로 준다."""
     gaps = _frame_gap_source(ev)
     gaps.sort(key=lambda g: g["end"] - g["start"], reverse=True)
     specs = []
