@@ -49,9 +49,9 @@ G	350.0	469.0	지도 공백
 
 ## 보강 모드
 
-보강 모드(디스패치가 명시): coverage-digest와 gap.lines만 입력 —
-**digest에 이미 있는 지식은 쓰지 않는다.** V는 gap.lines 전부 복사, K/C는 신규만.
-나머지 규칙 동일.
+보강 모드(디스패치가 명시): coverage-digest와 입력으로 주어진 gap*.lines 전부(분할
+됐으면 gap2.lines 등 전부) 입력 — **digest에 이미 있는 지식은 쓰지 않는다.** V는
+gap*.lines 전부 복사, K/C는 신규만. 나머지 규칙 동일.
 
 ## 최종 응답은 한 줄이다
 

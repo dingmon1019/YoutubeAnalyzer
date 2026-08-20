@@ -90,14 +90,16 @@ n>0이면 `--from-lines coverage.lines`로 반영한다(1회 한정) — exit 2�
 transcribe.md 보강 모드로 gap-frames.txt 경로만 주고 **자막 경로는 주지 않는다**(날조
 차단 — 실측 근거) — 프레임 12장 초과면 두 번에 나눠 디스패치, 출력
 `<cache_dir>/gap.lines`(2회면 gap2.lines) ③ 보강 합성(sonnet): synthesize.md 보강
-모드로 coverage-digest.txt + gap.lines를 주고 `<cache_dir>/gapfill.lines` 작성 ④
-`--from-lines gapfill.lines`(1회, exit 2면 INVALID 1회 재전달) ⑤ 보강 건수를 8단계
-`--note "공백 보강 n건"`으로 명시(실패 시 0건 명시).
+모드로 coverage-digest.txt + gap.lines(분할했으면 gap2.lines까지 전부)를 주고
+`<cache_dir>/gapfill.lines` 작성 ④ `--from-lines gapfill.lines`(1회, exit 2면
+INVALID 1회 재전달) ⑤ 보강 건수를 8단계 `--note "공백 보강 n건"`으로 명시(실패 시
+0건 명시).
 
 **8. video.md — 코드가 생성한다.**
 `evidence.py "<cache_dir>" --render --cross-flags <6단계 flag 수> --coverage-added <7단계 n>`
-문서는 evidence.json의 결정론적 렌더링이며 "표본 감사 미실시" 명시를 포함한다. 네가
-문서를 쓰거나 고치지 마라 — 고칠 것이 있으면 evidence를 고치고 다시 render한다.
+문서는 evidence.json의 결정론적 렌더링이며 "표본 감사 미실시" 명시를 포함한다. 사유가
+여럿이면(예: 커버리지 감사 생략 + 공백 보강) ` · `로 이어 하나의 `--note`로 전달한다.
+네가 문서를 쓰거나 고치지 마라 — 고칠 것이 있으면 evidence를 고치고 다시 render한다.
 
 **9. 응답.** 요약(영상유형·핵심 지식 수·⚠️ 건수 — 5단계 합성 에이전트 최종 응답의
 T·K·C·⚠️ 값만 쓴다) + 두 산출물 경로. 자연어 요청이 있었으면 **곧바로 이어서 수행한다.**
