@@ -1224,31 +1224,53 @@ def test_render_cli_falls_back_to_flat_on_malformed_info_json(tmp_path):
     assert "## 핵심 지식" in out and "### [" not in out
 
 
-class TestGapZoomPlan:
-    def _ev(self, gaps):
-        return {"gaps": gaps}
+def _frames_ev(ts, duration):
+    """프레임 t 리스트 + 영상 길이로 evidence 골격을 만든다.
 
+    gap_zoom_plan(Task 6)은 더 이상 ev["gaps"]를 입력으로 읽지 않는다 — 공백은
+    provenance.frames(map+zoom) 타임스탬프에서 결정론으로 계산된다(_frame_gap_source).
+    기존 테스트들은 gaps 딕셔너리를 직접 넣었지만, 이제는 그 gaps 딕셔너리와 동치인
+    공백을 만드는 프레임 배치로 재현해야 한다."""
+    return {
+        "video": {"duration": duration},
+        "provenance": {"frames": {"map": [{"t": t} for t in ts], "zoom": []}},
+    }
+
+
+class TestGapZoomPlan:
     def test_short_gap_one_midpoint(self):
-        # 100초 공백(60~160) → 중점 1개 = 01:50
-        specs = evidence.gap_zoom_plan(self._ev([{"start": 60.0, "end": 160.0, "reason": "x"}]))
+        # 프레임 t=60·t=160 + duration=160 → 공백 60~160(100초) → 중점 1개 = 01:50
+        specs = evidence.gap_zoom_plan(_frames_ev([60.0, 160.0], 160.0))
         assert specs == ["01:50@1024"]
 
     def test_long_gap_two_points(self):
-        # 300초 공백(0~300) → 1/3·2/3 = 01:40, 03:20
-        specs = evidence.gap_zoom_plan(self._ev([{"start": 0.0, "end": 300.0, "reason": "x"}]))
+        # 프레임 없음 + duration=300 → 공백 0~300(300초) → 1/3·2/3 = 01:40, 03:20
+        specs = evidence.gap_zoom_plan(_frames_ev([], 300.0))
         assert specs == ["01:40@1024", "03:20@1024"]
 
     def test_cap_prefers_long_gaps(self):
-        # 공백 20개(각 70초) → 상한 16으로 잘리되 긴 공백부터
-        gaps = [{"start": i * 100.0, "end": i * 100.0 + 70 + i, "reason": "x"} for i in range(20)]
-        specs = evidence.gap_zoom_plan(self._ev(gaps), max_frames=16)
+        # 조밀 버퍼(10초)와 공백(70~89초)을 번갈아 배치해 20개 공백을 만든다
+        # → 상한 16으로 잘리되 긴 공백부터
+        ts, cur = [], 0.0
+        for i in range(20):
+            cur += 10.0
+            ts.append(cur)
+            cur += 70.0 + i
+            ts.append(cur)
+        specs = evidence.gap_zoom_plan(_frames_ev(ts, cur), max_frames=16)
         assert len(specs) == 16
 
     def test_no_gaps_empty(self):
-        assert evidence.gap_zoom_plan(self._ev([])) == []
+        # 신규 ②: 프레임이 조밀(전 간격 ≤60초)하면 공백이 없다
+        specs = evidence.gap_zoom_plan(_frames_ev([30.0, 60.0, 90.0], 120.0))
+        assert specs == []
 
-    def test_non_dict_gap_skipped(self):
-        assert evidence.gap_zoom_plan(self._ev(["산문 노트"])) == []
+    def test_triggers_even_when_llm_gaps_empty(self):
+        # 신규 ①(회귀 가드): LLM이 gaps를 0건 기록했어도(evidence.py의 이번 결함이 정확히
+        # 이 상황) 프레임이 성기면 공백이 여전히 결정론적으로 계산된다.
+        ev = _frames_ev([60.0, 160.0], 160.0)
+        ev["gaps"] = []
+        assert evidence.gap_zoom_plan(ev) == ["01:50@1024"]
 
 
 class TestGapZoomPlanActivity:
@@ -1259,37 +1281,40 @@ class TestGapZoomPlanActivity:
         return c
 
     def test_peak_beats_midpoint(self):
-        # 공백 60~160, 피크 @150(값 90) → 중점 01:50이 아니라 02:30
-        ev = {"gaps": [{"start": 60.0, "end": 160.0, "reason": "x"}]}
+        # 프레임 t=60·t=160 + duration=160 → 공백 60~160, 피크 @150(값 90) → 02:30
+        ev = _frames_ev([60.0, 160.0], 160.0)
         curve = self._curve(200, {150: 90.0, 110: 10.0})
         assert evidence.gap_zoom_plan(ev, activity_curve=curve) == ["02:30@1024"]
 
     def test_long_gap_two_peaks_with_separation(self):
-        # 공백 0~300, 피크 @100(90)·@110(80)·@250(70) → 110은 100과 45초 미만이라 250 선택
-        ev = {"gaps": [{"start": 0.0, "end": 300.0, "reason": "x"}]}
+        # 프레임 없음 + duration=300 → 공백 0~300, 피크 @100(90)·@110(80)·@250(70)
+        # → 110은 100과 45초 미만이라 250 선택
+        ev = _frames_ev([], 300.0)
         curve = self._curve(400, {100: 90.0, 110: 80.0, 250: 70.0})
         specs = evidence.gap_zoom_plan(ev, activity_curve=curve)
         assert sorted(specs) == ["01:40@1024", "04:10@1024"]
 
     def test_zero_curve_falls_back_to_midpoint(self):
-        ev = {"gaps": [{"start": 60.0, "end": 160.0, "reason": "x"}]}
+        ev = _frames_ev([60.0, 160.0], 160.0)
         assert evidence.gap_zoom_plan(ev, activity_curve=[0.0] * 200) == ["01:50@1024"]
 
     def test_none_curve_keeps_legacy(self):
-        ev = {"gaps": [{"start": 0.0, "end": 300.0, "reason": "x"}]}
+        ev = _frames_ev([], 300.0)
         assert evidence.gap_zoom_plan(ev, activity_curve=None) == ["01:40@1024", "03:20@1024"]
 
     def test_margin_excludes_gap_edges(self):
         # 경계 3초 이내 피크는 제외 — 공백 60~160, 피크 @61(99)은 무시하고 @120(50) 선택
-        ev = {"gaps": [{"start": 60.0, "end": 160.0, "reason": "x"}]}
+        ev = _frames_ev([60.0, 160.0], 160.0)
         curve = self._curve(200, {61: 99.0, 120: 50.0})
         assert evidence.gap_zoom_plan(ev, activity_curve=curve) == ["02:00@1024"]
 
     def test_fractional_gap_margin_uses_ceil_floor(self):
         """리뷰 F1: 공백 경계가 소수초(100.5~200.5)면 int(s)+3은 실제 여유가 3초 미만인
         지점을 통과시킨다. @103(99)은 시작에서 2.5초(103-100.5)뿐이라 마진 미달로
-        제외되어야 하고, @150(50)이 선택돼야 한다."""
-        ev = {"gaps": [{"start": 100.5, "end": 200.5, "reason": "x"}]}
+        제외되어야 하고, @150(50)이 선택돼야 한다.
+        버퍼 프레임 t=60.0을 추가로 넣어 0~100.5 구간이(0~60.0, 60.0~100.5 모두 ≤60초)
+        별도 공백으로 잡히지 않게 하고, 목표 공백은 100.5~200.5 하나만 남긴다."""
+        ev = _frames_ev([60.0, 100.5, 200.5], 200.5)
         curve = self._curve(250, {103: 99.0, 150: 50.0})
         assert evidence.gap_zoom_plan(ev, activity_curve=curve) == ["02:30@1024"]
 
@@ -1297,7 +1322,7 @@ class TestGapZoomPlanActivity:
 def test_gap_plan_falls_back_on_encoding_corrupt_signals_json(tmp_path):
     """리뷰 F2: signals.json이 UTF-8로 디코드 불가능(UnicodeDecodeError)해도 크래시
     없이 레거시 중점/삼분점 폴백으로 조용히 진행한다 — exit 0, stderr 비어 있음."""
-    evidence.save(tmp_path, {"gaps": [{"start": 60.0, "end": 160.0, "reason": "x"}]})
+    evidence.save(tmp_path, _frames_ev([60.0, 160.0], 160.0))
     (tmp_path / "signals.json").write_bytes(b"\xff\xfe\x00\x01broken-not-utf8")
     p = _run([str(tmp_path), "--gap-plan"])
     assert p.returncode == 0

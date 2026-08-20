@@ -937,8 +937,45 @@ def _activity_peak_points(s: float, e: float, curve) -> list:
     return sorted(float(c) for c in chosen)
 
 
+def _frame_gap_source(ev: dict) -> list:
+    """provenance.frames(map+zoom) 타임스탬프에서 결정론적으로 공백 구간을 계산한다.
+
+    **공백 산출은 산술이지 LLM 판단이 아니다.** ev["gaps"]는 합성 단계의 LLM이 기록하는
+    값이라 같은 캐시를 재실행해도 실행마다 0~16건으로 흔들린다(실측 v0.10.1 — 이 때문에
+    보강 단계가 미발동했다). map+zoom 프레임 타임스탬프를 정렬하고 0초·영상 길이를
+    양끝에 붙여 인접 간격이 60초를 넘는 자리만 뽑으면 같은 입력에서 항상 같은 결과가
+    나온다(같은 캐시 실측: LLM 기록 0건 vs 이 계산 27구간).
+
+    ev["gaps"](정직 보고용 G 레코드, video.md 누락 후보 절이 그대로 쓴다)는 이 계산과
+    무관하다 — 더 이상 gap_zoom_plan의 입력이 아니다."""
+    fr = (ev.get("provenance") or {}).get("frames") or {}
+    ts = set()
+    for bucket in ("map", "zoom"):
+        for f in fr.get(bucket) or []:
+            if not isinstance(f, dict):
+                continue
+            t = f.get("t")
+            if t is None:
+                continue
+            try:
+                ts.add(float(t))
+            except (TypeError, ValueError):
+                continue
+    ordered = sorted(ts)
+    duration = float((ev.get("video") or {}).get("duration") or 0)
+    if duration <= 0:
+        # video.duration이 없거나 0이면 마지막 프레임 타임스탬프로 방어한다 —
+        # 그마저 없으면(프레임이 하나도 없음) 0.0으로 남아 pts=[0.0, 0.0], 공백 없음.
+        duration = ordered[-1] if ordered else 0.0
+    pts = [0.0] + ordered + [duration]
+    return [{"start": a, "end": b} for a, b in zip(pts, pts[1:]) if b - a > 60]
+
+
 def gap_zoom_plan(ev: dict, max_frames: int = 16, activity_curve: list = None) -> list:
-    """G 구간의 확대 지점을 결정론적으로 산출한다 — LLM 비용 0.
+    """공백 구간의 확대 지점을 결정론적으로 산출한다 — LLM 비용 0.
+
+    공백 자체도 결정론이다(_frame_gap_source: 프레임 타임스탬프 기반, ev["gaps"]는 더 이상
+    입력이 아니다 — Task 6, 트리거 신뢰성 실측 v0.10.1).
 
     activity_curve(초당 1점 float 리스트, 인덱스=초)가 주어지면 각 공백의 화면 변화 피크를
     조준한다(_activity_peak_points 참고). curve가 없거나 구간 내 값이 전부 0이면 기존
@@ -946,11 +983,11 @@ def gap_zoom_plan(ev: dict, max_frames: int = 16, activity_curve: list = None) -
     상한 초과 시 긴 공백 우선.
     (실측 2026-08-19: 50분 영상 공백 16구간에 화면 전용 치명 정보 3건 실재)
     (실측 2026-08-19b: 중점/삼분점 샘플 회수 1.5/3 — activity 피크로 명중률 개선, Task 4)"""
-    gaps = [g for g in (ev.get("gaps") or []) if isinstance(g, dict)]
-    gaps.sort(key=lambda g: float(g.get("end", 0)) - float(g.get("start", 0)), reverse=True)
+    gaps = _frame_gap_source(ev)
+    gaps.sort(key=lambda g: g["end"] - g["start"], reverse=True)
     specs = []
     for g in gaps:
-        s, e = float(g.get("start", 0)), float(g.get("end", 0))
+        s, e = g["start"], g["end"]
         pts = _activity_peak_points(s, e, activity_curve)
         if pts is None:
             pts = [(s + e) / 2] if e - s < 180 else [s + (e - s) / 3, s + 2 * (e - s) / 3]
