@@ -1222,3 +1222,30 @@ def test_render_cli_falls_back_to_flat_on_malformed_info_json(tmp_path):
     assert "NOTE" in p.stderr
     out = (tmp_path / "video.md").read_text(encoding="utf-8")
     assert "## 핵심 지식" in out and "### [" not in out
+
+
+class TestGapZoomPlan:
+    def _ev(self, gaps):
+        return {"gaps": gaps}
+
+    def test_short_gap_one_midpoint(self):
+        # 100초 공백(60~160) → 중점 1개 = 01:50
+        specs = evidence.gap_zoom_plan(self._ev([{"start": 60.0, "end": 160.0, "reason": "x"}]))
+        assert specs == ["01:50@1024"]
+
+    def test_long_gap_two_points(self):
+        # 300초 공백(0~300) → 1/3·2/3 = 01:40, 03:20
+        specs = evidence.gap_zoom_plan(self._ev([{"start": 0.0, "end": 300.0, "reason": "x"}]))
+        assert specs == ["01:40@1024", "03:20@1024"]
+
+    def test_cap_prefers_long_gaps(self):
+        # 공백 20개(각 70초) → 상한 16으로 잘리되 긴 공백부터
+        gaps = [{"start": i * 100.0, "end": i * 100.0 + 70 + i, "reason": "x"} for i in range(20)]
+        specs = evidence.gap_zoom_plan(self._ev(gaps), max_frames=16)
+        assert len(specs) == 16
+
+    def test_no_gaps_empty(self):
+        assert evidence.gap_zoom_plan(self._ev([])) == []
+
+    def test_non_dict_gap_skipped(self):
+        assert evidence.gap_zoom_plan(self._ev(["산문 노트"])) == []

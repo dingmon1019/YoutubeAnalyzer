@@ -899,6 +899,22 @@ def render_video_md(ev: dict, cross_flags: int = 0, coverage_added: int = 0, not
     return "\n".join(lines)
 
 
+def gap_zoom_plan(ev: dict, max_frames: int = 16) -> list:
+    """G 구간의 확대 지점을 결정론적으로 산출한다 — LLM 비용 0.
+
+    180초 미만 공백은 중점 1개, 이상은 1/3·2/3 지점 2개. 상한 초과 시 긴 공백 우선.
+    (실측 2026-08-19: 50분 영상 공백 16구간에 화면 전용 치명 정보 3건 실재)"""
+    gaps = [g for g in (ev.get("gaps") or []) if isinstance(g, dict)]
+    gaps.sort(key=lambda g: float(g.get("end", 0)) - float(g.get("start", 0)), reverse=True)
+    specs = []
+    for g in gaps:
+        s, e = float(g.get("start", 0)), float(g.get("end", 0))
+        pts = [(s + e) / 2] if e - s < 180 else [s + (e - s) / 3, s + 2 * (e - s) / 3]
+        for p in pts:
+            specs.append(f"{int(p // 60):02d}:{int(p % 60):02d}@1024")
+    return specs[:max_frames]
+
+
 def summary_line(ev: dict) -> str:
     p = ev["provenance"]
     return (f"EVIDENCE schema={ev['schema_version']} "
@@ -935,6 +951,9 @@ def main() -> int:
                     help="해시·수치 판독이 갈린 자리 검출 (LLM 없이, 감사 후보 선정용)")
     ap.add_argument("--render", action="store_true",
                     help="evidence.json에서 video.md를 결정론적으로 생성")
+    ap.add_argument("--gap-plan", dest="gap_plan", action="store_true",
+                    help="공백(G) 확대 지점을 결정론적으로 산출해 zoom.py --timestamps "
+                    "스펙(콤마 구분)으로 출력 (보강 단계용, fail-soft)")
     ap.add_argument("--cross-flags", dest="cross_flags", type=int, default=0)
     ap.add_argument("--coverage-added", dest="coverage_added", type=int, default=0)
     ap.add_argument("--note", default="",
@@ -944,6 +963,12 @@ def main() -> int:
 
     cd = Path(args.cache_dir)
     if not evidence_path(cd).exists():
+        if args.gap_plan:
+            # 보강(gap-plan)은 선택 단계다 — evidence.json이 아직 없다고 파이프라인
+            # 전체를 exit 2로 끊지 않는다(fail-soft). 다른 액션과 섞여 있어도 evidence.json이
+            # 없으면 그 액션들도 어차피 수행 불가하므로 여기서 함께 종료한다.
+            print(f"NOTE: {evidence_path(cd)} 없음 — gap-plan 생략", file=sys.stderr)
+            return 0
         print(f"ERROR: {evidence_path(cd)} 없음 — analyze.py를 먼저 실행한다", file=sys.stderr)
         return 2
     ev = load(cd)
@@ -1024,6 +1049,10 @@ def main() -> int:
         for c in audit_candidates(ev, limit=args.audit_candidates):
             refs = " ".join(f"{e.get('source')}:{e.get('ref')}" for e in c["evidence"])
             print(f"{c['id']}	{c['kind']}	{c['type']}	{refs}	{c['content']}")
+    if args.gap_plan:
+        specs = gap_zoom_plan(ev)
+        if specs:
+            print(",".join(specs))
     if args.validate:
         errs = validate(ev)
         if errs:
