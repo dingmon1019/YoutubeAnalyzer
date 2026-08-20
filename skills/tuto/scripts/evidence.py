@@ -967,7 +967,14 @@ def _frame_gap_source(ev: dict) -> list:
         # video.duration이 없거나 0이면 마지막 프레임 타임스탬프로 방어한다 —
         # 그마저 없으면(프레임이 하나도 없음) 0.0으로 남아 pts=[0.0, 0.0], 공백 없음.
         duration = ordered[-1] if ordered else 0.0
-    pts = [0.0] + ordered + [duration]
+    pts = [0.0] + ordered
+    # 리뷰 F2: duration은 마지막 프레임 t보다 클 때만 끝점으로 붙인다. 무조건 뒤에
+    # 붙이면 duration이 실제보다 작게 기록된(메타데이터 역전) 경우 pts가
+    # [..., 마지막프레임t, duration]처럼 내림차순으로 끝나 산술이 깨진다. 프레임이
+    # 하나도 없으면(ordered 비어 있음) 비교 대상이 없으므로 그대로 duration을 끝점으로
+    # 쓴다 — 이 경우 duration이 유일한 신호다.
+    if not ordered or duration > ordered[-1]:
+        pts.append(duration)
     return [{"start": a, "end": b} for a, b in zip(pts, pts[1:]) if b - a > 60]
 
 

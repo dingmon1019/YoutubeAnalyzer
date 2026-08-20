@@ -1272,6 +1272,22 @@ class TestGapZoomPlan:
         ev["gaps"] = []
         assert evidence.gap_zoom_plan(ev) == ["01:50@1024"]
 
+    def test_duration_reversal_uses_frame_boundary_not_duration(self):
+        """리뷰 F2 회귀 가드: video.duration이 마지막 프레임 t(300)보다 작게(160) 기록된
+        역전 입력에서도 pts를 [.., 300, 160]처럼 내림차순으로 끝내지 않는다 — duration은
+        마지막 프레임 t보다 클 때만 끝점으로 붙는다. 여기서는 duration을 아예 버리고
+        프레임 경계(300)가 끝점이 되어 공백 (60, 300) 하나만 나온다."""
+        ev = _frames_ev([60.0, 300.0], 160.0)
+        assert evidence._frame_gap_source(ev) == [{"start": 60.0, "end": 300.0}]
+        # 240초 공백(≥180) → 1/3·2/3 지점 = 140(02:20), 220(03:40).
+        # 요지: duration(160) 근접 지점이 아니라 프레임 경계 기준으로 계산되고,
+        # 출력의 모든 지점이 max(마지막 프레임 t=300, duration=160)=300 이하다.
+        specs = evidence.gap_zoom_plan(ev)
+        assert specs == ["02:20@1024", "03:40@1024"]
+        for spec in specs:
+            mm, ss = spec.split("@")[0].split(":")
+            assert int(mm) * 60 + int(ss) <= max(300.0, 160.0)
+
 
 class TestGapZoomPlanActivity:
     def _curve(self, length, peaks):
