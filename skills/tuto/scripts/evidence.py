@@ -963,10 +963,17 @@ def main() -> int:
 
     cd = Path(args.cache_dir)
     if not evidence_path(cd).exists():
-        if args.gap_plan:
+        other_actions = bool(
+            args.merge or args.from_lines or args.verdicts or args.add_frames or
+            args.validate or args.audit_candidates or args.coverage_input is not None or
+            args.digest or args.cross_check or args.render or args.summary)
+        if args.gap_plan and not other_actions:
             # 보강(gap-plan)은 선택 단계다 — evidence.json이 아직 없다고 파이프라인
-            # 전체를 exit 2로 끊지 않는다(fail-soft). 다른 액션과 섞여 있어도 evidence.json이
-            # 없으면 그 액션들도 어차피 수행 불가하므로 여기서 함께 종료한다.
+            # 전체를 exit 2로 끊지 않는다(fail-soft). 단, 이 완화는 --gap-plan이
+            # **유일하게 요청된 액션일 때만** 적용한다. 다른 액션(--render 등)과 섞여
+            # 있으면 그 액션들이 통보 없이 스킵된 채 exit 0으로 끝나 파이프라인이 성공으로
+            # 오판하는 조용한 실패가 되므로, 그 경우는 기존 하드게이트(비정상 종료)로
+            # 그대로 흘려보낸다.
             print(f"NOTE: {evidence_path(cd)} 없음 — gap-plan 생략", file=sys.stderr)
             return 0
         print(f"ERROR: {evidence_path(cd)} 없음 — analyze.py를 먼저 실행한다", file=sys.stderr)

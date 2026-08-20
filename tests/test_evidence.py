@@ -1249,3 +1249,21 @@ class TestGapZoomPlan:
 
     def test_non_dict_gap_skipped(self):
         assert evidence.gap_zoom_plan(self._ev(["산문 노트"])) == []
+
+
+def test_gap_plan_alone_is_fail_soft_when_evidence_missing(tmp_path):
+    """--gap-plan만 단독 요청됐을 때 evidence.json 부재는 fail-soft(NOTE + exit 0)로
+    처리한다 — 보강은 선택 단계라 파이프라인을 끊지 않는다."""
+    p = _run([str(tmp_path), "--gap-plan"])
+    assert p.returncode == 0
+    assert "NOTE" in p.stderr
+
+
+def test_gap_plan_with_other_action_hits_hard_gate_when_evidence_missing(tmp_path):
+    """--gap-plan이 --render 등 다른 액션과 한 호출에 섞이면 evidence.json 부재를
+    조용히 넘기지 않는다 — 그렇지 않으면 --render가 통보 없이 스킵된 채 exit 0으로
+    끝나 파이프라인이 성공으로 오판하는 조용한 실패가 된다. 이 경우는 기존
+    하드게이트(evidence.json 부재 시 비정상 종료)와 동일하게 흘러가야 한다."""
+    p = _run([str(tmp_path), "--gap-plan", "--render"])
+    assert p.returncode == 2
+    assert "ERROR" in p.stderr
