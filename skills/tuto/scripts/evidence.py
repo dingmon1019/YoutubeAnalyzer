@@ -902,6 +902,11 @@ def render_video_md(ev: dict, cross_flags: int = 0, coverage_added: int = 0, not
 
 _GAP_PLAN_MARGIN = 3        # 공백 경계 근접 지점은 화면이 아직 전환 중일 확률이 높아 제외
 _GAP_PLAN_MIN_SEPARATION = 45  # 두 확대 지점이 같은 화면을 중복 촬영하지 않도록 강제하는 최소 간격
+# Task 7 실측(v0.10.2 통합 실행 + 오프라인 계산): 60초는 분량 비례 지도(~60초 간격)와
+# 맞물려 거의 모든 구간을 공백으로 판정한다 — 50분 영상 보강 16장(+$2), 32분 영상도
+# 13장 발동 예상. 90초로 올리면 50분 11장·32분 5장으로 줄고, 실측에서 표적이 들었던
+# 공백(99초·140초·237초)은 전부 생존한다 — 정보 유실 위험 없이 한계 비용만 깎는 조정.
+GAP_BACKFILL_THRESHOLD = 90.0
 
 
 def _activity_peak_points(s: float, e: float, curve) -> list:
@@ -943,8 +948,8 @@ def _frame_gap_source(ev: dict) -> list:
     **공백 산출은 산술이지 LLM 판단이 아니다.** ev["gaps"]는 합성 단계의 LLM이 기록하는
     값이라 같은 캐시를 재실행해도 실행마다 0~16건으로 흔들린다(실측 v0.10.1 — 이 때문에
     보강 단계가 미발동했다). map+zoom 프레임 타임스탬프를 정렬하고 0초·영상 길이를
-    양끝에 붙여 인접 간격이 60초를 넘는 자리만 뽑으면 같은 입력에서 항상 같은 결과가
-    나온다(같은 캐시 실측: LLM 기록 0건 vs 이 계산 27구간).
+    양끝에 붙여 인접 간격이 GAP_BACKFILL_THRESHOLD(90)초를 넘는 자리만 뽑으면 같은
+    입력에서 항상 같은 결과가 나온다(같은 캐시 실측: LLM 기록 0건 vs 이 계산 27구간).
 
     ev["gaps"](정직 보고용 G 레코드, video.md 누락 후보 절이 그대로 쓴다)는 이 계산과
     무관하다 — 더 이상 gap_zoom_plan의 입력이 아니다."""
@@ -975,7 +980,7 @@ def _frame_gap_source(ev: dict) -> list:
     # 쓴다 — 이 경우 duration이 유일한 신호다.
     if not ordered or duration > ordered[-1]:
         pts.append(duration)
-    return [{"start": a, "end": b} for a, b in zip(pts, pts[1:]) if b - a > 60]
+    return [{"start": a, "end": b} for a, b in zip(pts, pts[1:]) if b - a > GAP_BACKFILL_THRESHOLD]
 
 
 def gap_zoom_plan(ev: dict, max_frames: int = 16, activity_curve: list = None) -> list:

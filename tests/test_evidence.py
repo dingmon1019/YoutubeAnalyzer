@@ -1249,21 +1249,36 @@ class TestGapZoomPlan:
         assert specs == ["01:40@1024", "03:20@1024"]
 
     def test_cap_prefers_long_gaps(self):
-        # 조밀 버퍼(10초)와 공백(70~89초)을 번갈아 배치해 20개 공백을 만든다
-        # → 상한 16으로 잘리되 긴 공백부터
+        # 조밀 버퍼(10초, 임계 90 이하라 공백 아님)와 공백(91~110초, 임계 90 초과)을
+        # 번갈아 배치해 20개 공백을 만든다 → 상한 16으로 잘리되 긴 공백부터
+        # (Task 7: 임계 60→90 상향으로 구간 크기를 70~89초에서 91~110초로 조정 —
+        # 옛 70~89초는 새 임계(>90)에서 전부 공백 판정을 받지 못해 테스트가 깨진다)
         ts, cur = [], 0.0
         for i in range(20):
             cur += 10.0
             ts.append(cur)
-            cur += 70.0 + i
+            cur += 91.0 + i
             ts.append(cur)
         specs = evidence.gap_zoom_plan(_frames_ev(ts, cur), max_frames=16)
         assert len(specs) == 16
 
     def test_no_gaps_empty(self):
-        # 신규 ②: 프레임이 조밀(전 간격 ≤60초)하면 공백이 없다
+        # 신규 ②: 프레임이 조밀(전 간격 30초 ≤ 임계 90초)하면 공백이 없다
         specs = evidence.gap_zoom_plan(_frames_ev([30.0, 60.0, 90.0], 120.0))
         assert specs == []
+
+    def test_boundary_gap_exactly_threshold_is_not_a_gap(self):
+        # Task 7: 정확히 GAP_BACKFILL_THRESHOLD(90)초 간격은 공백이 아니다 — 비교가
+        # 엄격 부등호(>)라 경계값 자체는 포함되지 않는다.
+        ev = _frames_ev([90.0], 90.0)
+        assert evidence._frame_gap_source(ev) == []
+        assert evidence.gap_zoom_plan(ev) == []
+
+    def test_boundary_gap_just_over_threshold_is_a_gap(self):
+        # Task 7: 임계+1초(91초) 간격은 공백이다.
+        ev = _frames_ev([91.0], 91.0)
+        assert evidence._frame_gap_source(ev) == [{"start": 0.0, "end": 91.0}]
+        assert evidence.gap_zoom_plan(ev) == ["00:45@1024"]
 
     def test_triggers_even_when_llm_gaps_empty(self):
         # 신규 ①(회귀 가드): LLM이 gaps를 0건 기록했어도(evidence.py의 이번 결함이 정확히
