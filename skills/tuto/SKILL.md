@@ -43,7 +43,8 @@ NOTE(yt-dlp 최신성·JS 런타임 부재)는 사용자에게 한 줄 알린다
 자막: <cache_dir>/pass1-report.txt. 출력: <cache_dir>/vision-map.lines".
 에이전트의 최종 응답 `프레임 N, V라인 M | Z: MM:SS@1024,...`에서 Z 목록을 얻는다 —
 이것이 확대 판정이다. 네가 프레임을 보고 고르지 않는다. 선택 기준(값 밀도·지시어 큐 —
-"여기 보세요" 등)은 transcribe.md 소관이다.
+"여기 보세요" 등)은 transcribe.md 소관이다. 최종 응답 `프레임 N, V라인 M`에서
+**M < N×2이면 빈약 전사** — 같은 디스패치를 1회만 재시도(지시에 '빈약 전사 감지 — 프레임당 값을 빠짐없이, 요약 금지' 추가). 재시도 후에도 낮으면 그대로 진행하되 8단계 `--note "저밀도 전사 n/장"`으로 보고한다.
 
 **3. 확대.** `zoom.py <id> --timestamps "<Z목록>"` (1024 최대 4장·20분 초과 8장, 총
 6장·초과 12장) 출력을
@@ -52,6 +53,7 @@ NOTE(yt-dlp 최신성·JS 런타임 부재)는 사용자에게 한 줄 알린다
 
 **4. 비전② (haiku).** 같은 프롬프트 파일, 모드=확대. 프레임 목록 대신
 `<cache_dir>/zoom-out.txt` 경로를 준다. 출력=`<cache_dir>/vision-zoom.lines`.
+최종 응답 `프레임 N, V라인 M`에서 **M < N×2이면 빈약 전사** — 같은 디스패치를 1회만 재시도(지시에 '빈약 전사 감지 — 프레임당 값을 빠짐없이, 요약 금지' 추가). 재시도 후에도 낮으면 그대로 진행하되 8단계 `--note "저밀도 전사 n/장"`으로 보고한다.
 
 **5. 합성 (Agent, `model: "sonnet"`).** "`<PROMPTS>/synthesize.md`를 Read하고 수행.
 입력: pass1-report.txt, vision-map.lines, vision-zoom.lines. 출력:
@@ -62,8 +64,10 @@ NOTE(yt-dlp 최신성·JS 런타임 부재)는 사용자에게 한 줄 알린다
 `evidence.py "<cache_dir>" --from-lines "<cache_dir>/patch.lines" --cross-check` 한 호출 —
 기존 `--merge` 스키마 검증 게이트를 그대로 통과해야 한다. stdout의 `DROPPED n`은
 8단계 `--note "형식 드롭 n건"`으로 보고할 뿐 재전달 대상이 아니다(n>0일 때만). exit 2
-INVALID(스키마 검증 실패든 K/C 드롭율 20% 초과든)는 stderr 줄 그대로 합성 에이전트에
-재전달해 1회 수정시킨다(파일 수정도 에이전트가 한다). CROSSCHECK 출력은
+INVALID(스키마 검증 실패든 K/C 드롭율 20% 초과든)는 stderr의
+**INVALID 전체 목록을 한 번에** 합성 에이전트에 재전달해 1회 수정시키고(파일
+수정도 에이전트가 한다), 재전달 후에는 **완료 알림만 기다린다**
+(타이머·폴링·ScheduleWakeup 금지). CROSSCHECK 출력은
 v-id·kind·값쌍뿐 프레임명이 없다 — flag는 **재확인 디스패치 없이** 건수만 기억해
 8단계 `--cross-flags`에 그대로 넣는다.
 

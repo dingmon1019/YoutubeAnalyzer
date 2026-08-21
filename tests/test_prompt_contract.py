@@ -194,3 +194,28 @@ class TestStepGranularityContract:
     def test_steps_are_not_merged(self):
         assert "단계는 합치지 마라" in SYNTHESIZE
         assert "재현 가능성이 우선" in SYNTHESIZE
+
+
+class TestDensitySelfCheckContract:
+    # 전사 밀도 안정화 Task 1(2026-08-21): 임계 2.0/장 실측 확정(빈약 실행 전부
+    # <1.6, 건강 실행 전부 ≥2.1) — Write 전 자가 점검으로 훑고 지나간 전사를 감지한다.
+    def test_self_check_before_write(self):
+        assert "Write 전에 세라" in TRANSCRIBE
+
+    def test_self_check_threshold(self):
+        assert "프레임 수 × 2" in TRANSCRIBE
+
+    def test_self_check_remediation(self):
+        assert "각 프레임을 다시 개별로 보며 빠뜨린 값을 보충한 뒤" in TRANSCRIBE
+
+
+class TestVisionTypeEnumStrengthenedContract:
+    # 전사 밀도 안정화 Task 1b(2026-08-21): 실측 게이트에서 haiku가 enum 밖
+    # `diagram`을 17건 출력해 merge가 전량 거부됐다 — type 줄에 목록 밖 단어
+    # 금지를 강화한다(evidence.py가 별칭으로 흡수하지만 애초에 덜 내야 싸다).
+    def test_out_of_enum_word_forbidden(self):
+        assert "목록 밖 단어" in TRANSCRIBE
+        assert "diagram" in TRANSCRIBE
+
+    def test_diagram_graph_map_to_chart_guidance(self):
+        assert "다이어그램" in TRANSCRIBE and "그래프" in TRANSCRIBE

@@ -157,3 +157,30 @@ class TestSelectiveRegistrationContract:
         # vision-*.lines를 그때 Read하라는 지연 로딩 절이 있어야 한다.
         assert "정본에 없는 관측을 물으면" in TEXT
         assert "vision-*.lines를 그때 Read" in TEXT
+
+
+class TestDensityDispatchRetryContract:
+    # 전사 밀도 안정화 Task 1(2026-08-21): 비전①·② 각 디스패치에 빈약 감지(M < N×2)
+    # + 1회 재시도 + 저밀도 note 배선을 각각 건다 — 스케일 프리모템 방어 ①②③.
+    def test_thin_transcription_threshold_present_twice(self):
+        assert TEXT.count("M < N×2이면 빈약 전사") == 2
+
+    def test_retry_cap_present_twice(self):
+        assert TEXT.count("1회만 재시도") == 2
+
+    def test_retry_instruction_wording_present_twice(self):
+        assert TEXT.count("빈약 전사 감지 — 프레임당 값을 빠짐없이, 요약 금지") == 2
+
+    def test_low_density_note_present(self):
+        assert '저밀도 전사 n/장' in TEXT
+
+
+class TestGateFailureRetryContract:
+    # 전사 밀도 안정화 Task 1b(2026-08-21): 실측 통합 게이트(nHcfoHOW4uA)에서 6단계
+    # INVALID 재전달이 왕복 3회로 번졌다 — 전체 목록을 한 번에 전달하고 완료
+    # 알림만 기다리게(폴링·타이머 금지) 절차를 강화한다.
+    def test_invalid_forwarded_all_at_once(self):
+        assert "INVALID 전체 목록을 한 번에" in TEXT
+
+    def test_no_polling_after_forward(self):
+        assert "타이머·폴링·ScheduleWakeup 금지" in TEXT
