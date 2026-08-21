@@ -184,3 +184,14 @@ class TestGateFailureRetryContract:
 
     def test_no_polling_after_forward(self):
         assert "타이머·폴링·ScheduleWakeup 금지" in TEXT
+
+
+class TestDensityCureContract:
+    # 치유 라운드(density-cure, 2026-08-21): 본게이트 실측 — haiku 동일 조건 재시도는
+    # 지도 만성 빈약을 못 살린다(9V→8V, K 29). 재시도는 sonnet 승격으로 고정한다.
+    # 승격은 재시도 한정 — 1차 전사가 sonnet이 되면 run6 실측($3.61)의 비용 역전이 재발한다.
+    def test_retry_escalates_to_sonnet_twice(self):
+        assert TEXT.count('`model: "sonnet"`으로 승격해 1회만 재시도') == 2
+
+    def test_first_pass_stays_haiku(self):
+        assert '비전① (Agent, `model: "haiku"`)' in TEXT
