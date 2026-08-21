@@ -219,3 +219,12 @@ class TestVisionTypeEnumStrengthenedContract:
 
     def test_diagram_graph_map_to_chart_guidance(self):
         assert "다이어그램" in TRANSCRIBE and "그래프" in TRANSCRIBE
+
+
+class TestKnowledgeCeilingHarmonized:
+    # 천장 조화(density-cure 2차, 2026-08-21): 실측 3회(K 29·30·30)가 전부 "최대
+    # 30건" 천장에 붙어 있었다 — 20분 이하 영상에서 K≥40 목표는 계약상 도달 불가
+    # 였다. >20분에만 있던 분당 2.5 비례를 전 영상 max(30, 분당2.5)로 조화한다.
+    def test_ceiling_is_max_of_flat_and_rate(self):
+        assert "최대 30건과 분당 2.5건 중 큰 쪽" in SYNTHESIZE
+        assert "13분 → 33건" in SYNTHESIZE
