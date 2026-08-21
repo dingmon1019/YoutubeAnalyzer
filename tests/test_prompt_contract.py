@@ -194,3 +194,16 @@ class TestStepGranularityContract:
     def test_steps_are_not_merged(self):
         assert "단계는 합치지 마라" in SYNTHESIZE
         assert "재현 가능성이 우선" in SYNTHESIZE
+
+
+class TestDensitySelfCheckContract:
+    # 전사 밀도 안정화 Task 1(2026-08-21): 임계 2.0/장 실측 확정(빈약 실행 전부
+    # <1.6, 건강 실행 전부 ≥2.1) — Write 전 자가 점검으로 훑고 지나간 전사를 감지한다.
+    def test_self_check_before_write(self):
+        assert "Write 전에 세라" in TRANSCRIBE
+
+    def test_self_check_threshold(self):
+        assert "프레임 수 × 2" in TRANSCRIBE
+
+    def test_self_check_remediation(self):
+        assert "각 프레임을 다시 개별로 보며 빠뜨린 값을 보충한 뒤" in TRANSCRIBE
