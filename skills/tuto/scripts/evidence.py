@@ -427,8 +427,37 @@ def _next_id(items: list, prefix: str) -> str:
     return f"{prefix}{len(items) + 1}"
 
 
+def _max_v_id_num(items: list) -> int:
+    """visual_evidence 항목들의 v-id 중 최대 숫자(id_offset 계산용).
+
+    **len()이 아니라 최대 숫자를 쓴다.** 관용 드롭(아래 expand_lines)은 v-id에
+    결번을 남길 수 있다(예: v1·v3만 생존, v2는 드롭) — 이 경우 len()은 2지만
+    다음 배치가 이어 써야 할 오프셋은 3이다. len() 기반이면 새 V가 "v3"으로
+    재배정돼 이미 존재하는 v3과 충돌한다(dense 브랜치 실측에서 발견된 버그).
+    형식을 벗어난 id(접두사가 v가 아니거나 숫자가 아님)는 무시한다 — id_offset
+    계산 자체가 예외로 죽으면 --from-lines 전체가 막힌다."""
+    best = 0
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        vid = it.get("id")
+        if isinstance(vid, str) and vid.startswith("v") and vid[1:].isdigit():
+            best = max(best, int(vid[1:]))
+    return best
+
+
 # ── 컴팩트 patch 라인 확장기 — LLM이 JSON 보일러플레이트(따옴표·중괄호·필드명)를
 # 출력하던 토큰을 30~40% 줄인다. 확장 결과는 기존 merge/validate 게이트를 그대로 탄다.
+
+# 관용 드롭 게이트 — 사용자 정책 재정(dense 브랜치, $11.46 재시도 스파이럴 실측:
+# 낱줄 하나의 형식 오류가 배치 전체 거부 → 재시도 스파이럴로 번졌다). "완전성 >
+# 문자 정밀도" — 낱줄 하나의 형식 오류가 배치 전체를 죽이면 안 된다. K·C만 게이트를
+# 둔다: 이 둘이 실제 지식을 나르고, 드롭율이 높다는 것은 산발적 오타가 아니라 파일
+# 전체가 잘못된 규약이라는 신호이기 때문이다. V/T/G는 관측·부가 신호일 뿐이라
+# 게이트 없이 항상 관용한다(드롭 카운트만 남긴다). F-헤더·복수 파일 연접은 dense
+# 전용이라 이번 이식 범위 밖이다.
+KC_DROP_RATE_GATE = 0.20
+
 
 def _parse_refs(spec: str, id_offset: int = 0) -> list:
     out = []
@@ -449,26 +478,45 @@ def _parse_refs(spec: str, id_offset: int = 0) -> list:
 
 
 def expand_lines(text: str, id_offset: int = 0) -> dict:
-    """TAB 구분 라인(T/V/K/C/G)을 evidence patch dict로 확장한다. 형식 위반은
-    ValueError로 fail-loud — 조용히 건너뛰면 지식이 소리 없이 유실된다. 값 내부의
-    탭은 작성 시 스페이스로 치환한다.
+    """TAB 구분 라인(T/V/K/C/G)을 evidence patch dict로 확장한다.
 
-    id_offset: 이미 존재하는 visual_evidence 개수. --from-lines가 재호출되면(교차대조
-    정정·커버리지 보강) V의 id를 v{id_offset+1}..부터 부여해 기존 v-id와 충돌하지
-    않게 하고, 같은 배치의 K/C가 쓰는 로컬 v# 참조도 같은 오프셋으로 재매핑한다
-    (LLM은 항상 로컬 v1..vN으로 쓴다)."""
+    **관용 드롭(전량거부 폐지, dense 브랜치 8346d04·8678bbd 이식)**: 사용자 정책
+    재정 — "완전성 > 문자 정밀도, 약간의 오타는 허용"(dense 실측: 배치 하나에 낱줄
+    형식 오류 하나가 섞였다고 배치 전체를 거부하면 재시도 스파이럴로 번진다).
+    파싱 불가·필드 부족 낱줄은 더 이상 ValueError로 배치 전체를 죽이지 않는다 —
+    **드롭하고 카운트**만 하며 나머지 낱줄은 그대로 계속 처리한다. 반환 dict에
+    `_line_stats: {"attempted": {...}, "dropped": {...}}`(레코드 종류별 개수)를
+    담아 호출부(CLI)가 K/C 드롭율 게이트(`KC_DROP_RATE_GATE`, 20% 초과 시 배치
+    전체 거부)를 매길 수 있게 한다. **알 수 없는 레코드 종류**(T/V/K/C/G 밖의 첫
+    필드)는 여전히 즉시 ValueError로 fail-loud한다 — 낱줄 오타가 아니라 스키마
+    자체가 다르다는 신호라 관용 대상이 아니다. 값 내부의 탭은 작성 시 스페이스로
+    치환한다.
+
+    id_offset: 이미 존재하는 v-id 중 **최대 숫자**(len()이 아니다 — 관용 드롭이
+    만드는 v-id 결번 때문에 개수와 최대 숫자가 어긋날 수 있다. `_max_v_id_num`
+    참고). --from-lines가 재호출되면(교차대조 정정·커버리지 보강) V의 id를
+    v{id_offset+1}..부터 부여해 기존 v-id와 충돌하지 않게 하고, 같은 배치의 K/C가
+    쓰는 로컬 v# 참조도 같은 오프셋으로 재매핑한다(LLM은 항상 로컬 v1..vN으로
+    쓴다). **V가 드롭돼도 vn은 그대로 증가한다** — 하류 K/C의 로컬 v# 참조는 위치
+    기준이라, 드롭이 번호를 밀면 드롭과 무관한 뒤쪽 V들의 id가 전부 어긋난다."""
     patch = {"visual_evidence": [], "claims": [], "knowledge_items": [], "gaps": []}
     vn = 0
+    attempted = {"T": 0, "V": 0, "K": 0, "C": 0, "G": 0}
+    dropped = {"T": 0, "V": 0, "K": 0, "C": 0, "G": 0}
     for ln, raw in enumerate(text.splitlines(), 1):
         if not raw.strip():
             continue
         f = raw.split("\t")
         kind = f[0].strip()
+        if kind not in attempted:
+            raise ValueError(f"{ln}행 형식 오류 ({kind}): {raw[:80]!r} — 알 수 없는 레코드 종류")
+        attempted[kind] += 1
+        if kind == "V":
+            vn += 1
         try:
             if kind == "T":
                 patch["video_type"] = {"primary": f[1], "confidence": f[2], "basis": f[3]}
             elif kind == "V":
-                vn += 1
                 patch["visual_evidence"].append({
                     "id": f"v{id_offset + vn}", "type": f[1], "timestamp": float(f[2]),
                     "frame": f[3], "confidence": f[4], "value": f[5]})
@@ -485,12 +533,13 @@ def expand_lines(text: str, id_offset: int = 0) -> dict:
                 patch["claims"].append(c)
             elif kind == "G":
                 patch["gaps"].append({"start": float(f[1]), "end": float(f[2]), "reason": f[3]})
-            else:
-                raise ValueError(f"알 수 없는 레코드 종류: {kind!r}")
-        except (IndexError, ValueError) as e:
-            # 모든 예외를 행 번호로 수렴시킨다 — 특수 케이스 재-raise는 행 번호를
-            # 잃어 "INVALID 보고 1회 수정" 왕복을 깬다. 원본 메시지는 `— {e}`에 남는다.
-            raise ValueError(f"{ln}행 형식 오류 ({kind}): {raw[:80]!r} — {e}") from e
+        except (IndexError, ValueError):
+            # 관용 드롭 — 정책 재정("완전성 > 문자 정밀도")에 따라 이 낱줄만 건너뛰고
+            # 배치의 나머지는 계속 처리한다. 사유 문자열은 보존하지 않는다 — CLI는
+            # 낱줄 사유를 재전달하지 않고 DROPPED n 집계로만 보고하기로 했다.
+            dropped[kind] += 1
+            continue
+    patch["_line_stats"] = {"attempted": attempted, "dropped": dropped}
     return patch
 
 
@@ -1058,7 +1107,9 @@ def main() -> int:
     ap.add_argument("--merge", help="병합할 patch json 경로")
     ap.add_argument("--from-lines", dest="from_lines",
                     help="컴팩트 TSV 라인 파일을 patch로 확장해 병합 (T/V/K/C/G). "
-                    "값 내부의 탭은 작성 시 스페이스로 치환한다")
+                    "값 내부의 탭은 작성 시 스페이스로 치환한다. 형식이 어긋난 낱줄은 "
+                    "거부 대신 드롭+카운트(stdout MERGED ... DROPPED n) — K/C 드롭율이 "
+                    "20%를 넘을 때만 배치 전체를 INVALID로 거부한다")
     ap.add_argument("--verdicts", help="감사 판정 json 경로 (claim_id/status/auditor/note 배열)")
     ap.add_argument("--add-frames", dest="add_frames",
                     help="확대 프레임 등록 — zoom.py 출력을 담은 파일 경로 (FRAME 줄 파싱)")
@@ -1115,12 +1166,37 @@ def main() -> int:
             candidate = register_frames(candidate, names)
         if args.from_lines:
             try:
-                candidate = merge(candidate, expand_lines(
+                expanded = expand_lines(
                     Path(args.from_lines).read_text(encoding="utf-8"),
-                    id_offset=len(candidate.get("visual_evidence") or [])))
+                    id_offset=_max_v_id_num(candidate.get("visual_evidence")))
             except ValueError as e:
                 print(f"INVALID: {e}", file=sys.stderr)
                 return 2
+            # 관용 드롭 게이트(정책 재정, dense 브랜치 이식): expand_lines가 낱줄
+            # 오류를 드롭+카운트로 삼켰으므로, K/C 드롭율이 KC_DROP_RATE_GATE(20%)를
+            # 넘는지만 여기서 심판한다 — 넘으면 산발적 오타가 아니라 파일 전체가
+            # 잘못된 규약이라는 신호이므로 기존처럼 배치 전체를 거부한다(부분 병합
+            # 없음 — 재개 계약을 지킨다).
+            from_lines_stats = expanded.pop("_line_stats", {"attempted": {}, "dropped": {}})
+            # 게이트 메시지는 레코드종류 문자("K"/"C") 대신 실제 스키마 필드명을 쓴다 —
+            # SKILL.md 4단계의 기존 라우팅 규칙(visual_evidence→전사 / knowledge_items·
+            # claims→합성)에 자연히 걸리게 하기 위함이다(dense 브랜치 8678bbd 재리뷰).
+            _kc_field_name = {"K": "knowledge_items", "C": "claims"}
+            gate_hits = []
+            for k in ("K", "C"):
+                att = from_lines_stats["attempted"].get(k, 0)
+                drp = from_lines_stats["dropped"].get(k, 0)
+                if att > 0 and drp / att > KC_DROP_RATE_GATE:
+                    gate_hits.append(
+                        f"{_kc_field_name[k]} 드롭율 {drp}/{att}({drp / att:.0%}) — "
+                        f"{KC_DROP_RATE_GATE:.0%} 초과로 배치 전체를 거부한다(레코드 종류: {k})")
+            if gate_hits:
+                for msg in gate_hits:
+                    print(f"INVALID: {msg}", file=sys.stderr)
+                print("REJECTED: evidence.json은 변경되지 않았다", file=sys.stderr)
+                return 2
+            from_lines_dropped = sum(from_lines_stats["dropped"].values())
+            candidate = merge(candidate, expanded)
         if args.merge:
             candidate = merge(candidate, json.loads(Path(args.merge).read_text(encoding="utf-8")))
         if args.verdicts:
@@ -1134,6 +1210,11 @@ def main() -> int:
             return 2
         ev = candidate
         save(cd, ev)
+        if args.from_lines:
+            # DROPPED 표기(정책 재정): 형식이 어긋나 드롭된 낱줄 수를 오케스트레이터가
+            # 6단계 --note에 그대로 실어 보고할 수 있게 stdout에 남긴다. 재시도 대상이
+            # 아니라는 점이 핵심이므로 여기서는 개수만 — 사유별 내역은 남기지 않는다.
+            print(f"MERGED 1개 파일 — DROPPED {from_lines_dropped}")
 
     if args.cross_check:
         flags = cross_check_values(ev)
