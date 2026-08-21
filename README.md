@@ -11,9 +11,9 @@ Turn YouTube videos into **verified working knowledge** for AI agents — transc
 AI가 대신 영상을 보고, 자막과 화면을 함께 이해하고, 검증된 지식으로 변환합니다.
 이후 AI는 그 내용을 설명하거나 질문에 답하고, 현재 작업과 비교하거나 튜토리얼을 따라 할 수 있습니다.
 
-[![Version](https://img.shields.io/badge/version-0.11.0-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
+[![Version](https://img.shields.io/badge/version-0.13.0-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-333%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-352%20passed-brightgreen.svg)](tests/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://claude.com/claude-code)
 [![Languages](https://img.shields.io/badge/video-KO%20%7C%20EN-orange.svg)](#)
 
@@ -208,7 +208,7 @@ No API key is required. Transcript acquisition falls back through native caption
 
 ## Verification stamp
 Sample audit: not run — evidence is frame/caption-traceable but not independently audited.
-Cross-check: 1 value disagreement found, re-read and corrected before writing.
+Cross-check: 1 value disagreement flagged (recorded, not re-verified).
 Coverage audit (haiku): 1 missing knowledge item recovered.
 ```
 
@@ -241,7 +241,7 @@ Read하지 않음) 실측: 11분 27초 한국어 튜토리얼 1편, sonnet 세�
 | **Download + analysis** | **8.1× faster** | 154s → 19s |
 | **Zoom extraction** | **5.4× faster** | 327s → 61s |
 | **Audit escalation** | **0%** | On the selected audit model |
-| **Tests** | **333 passing** | Current regression suite (`python -m pytest tests/ -q`) |
+| **Tests** | **352 passing** | Current regression suite (`python -m pytest tests/ -q`) |
 
 **Why total cost falls less than `cache_write`:** `cache_read` scales with how much conversation
 already precedes the run, not with the pipeline. Between the two measurements above it went
@@ -286,6 +286,20 @@ stage triggers; the measured run came to **$5.72** under the prior 16-frame cap.
 since been lowered to 12 frames, which is estimated (**not yet remeasured**) at **$4.6–4.9**.
 Full numbers: [`docs/eval/reports/2026-08-19-gap-backfill.md`](docs/eval/reports/2026-08-19-gap-backfill.md).
 
+**v0.13.0 selective registration, measured (`kYPAlvnRiiI`, 20:04 tutorial, before/after).**
+Registering only the observations that `knowledge_items`/`claims` actually cite — instead of
+copying every V-line into `evidence.json` — cut cost from **$5.17 to $2.98 (−42%)**, with
+registered V dropping **155 → 21**. A separate 2-minute integration gate completed end-to-end
+with 0 uncited registrations. The knowledge-retention gate (≥85% of a baseline, i.e. 44 items)
+missed at **37 items (71%)**; a **$0.4** root-cause isolation experiment — re-running only
+synthesis on the same input with a step-merging-prohibition fix — reproduced the same 35
+knowledge items, tracing the shortfall to upstream transcript-density variance rather than to
+the registration change itself: the same video's zoom transcript came out at **125 lines on
+scout vs. 42 lines on the main gate**, a pre-existing condition (present since v0.11.0) unrelated
+to this branch. The merge was approved on that basis; transcript-density variance is now tracked
+as an open limitation (see [Limitations](#limitations)) instead of fixed here. Full numbers:
+[`docs/eval/reports/2026-08-21-selective-reg.md`](docs/eval/reports/2026-08-21-selective-reg.md).
+
 See [`docs/eval/`](docs/eval/) for the evaluation protocol and cost-accounting tool.
 
 ---
@@ -298,9 +312,9 @@ MAP                     VISION① (haiku)         ZOOM                    VISION
 analyze.py              transcribe.md           zoom.py                 transcribe.md           synthesize.md           evidence.py             digest+pass1 only       evidence.py
 ├ yt-dlp                ├ map frames 병렬 Read  ├ 1 call only           ├ zoom frames Read      ├ 이미지 Read 금지      ├ --from-lines          ├ no image Read         ├ --render
 ├ captions              ├ V라인 (화면 전사)     ├ 4×1024 max            └ V라인 (전사)          ├ 자막+V라인 텍스트만   ├ --cross-check         └ gaps → merge          ├ single Write
-├ heatmap               └ Z라인 (확대 요청)     ├ 6 frames total                                ├ V 전부 복사           ├ hash/number reread                            ├ free-form structure
+├ heatmap               └ Z라인 (확대 요청)     ├ 6 frames total                                ├ 인용 V만 복사          ├ hash/number reread                            ├ free-form structure
 ├ chapters                                      └ 1 crop max                                    └ + K/C/G 단일 배치     ├ zero extra cost                               ├ (t=MM:SS) refs
-├ activity peaks                                                                                                        └ flag 시 재확인(haiku)                         └ verification stamp
+├ activity peaks                                                                                                        └ flag 건수만 기록                               └ verification stamp
 └ map frames
 ```
 
@@ -337,7 +351,7 @@ measured results — see [Gap-targeted backfill](#7-gap-targeted-backfill) below
 
 Per-claim adversarial sample audits — a fresh agent independently trying to refute a sampled subset of claims — were removed in v0.5.0: 표본 감사는 v0.5.0에서 제거됐다(실측: 4편 24건 판정 수정 0건) — 커버리지 감사(haiku)와 결정론적 교차 대조가 검증을 담당한다.
 
-`evidence.py --cross-check` re-reads hashed and numeric values across `visual_evidence`, `claims`, and `knowledge_items` looking for internal disagreement — at **zero additional cost**, since it is deterministic post-processing rather than a subagent call. Frames it flags are re-read once by a disposable vision subagent (`haiku`) and the value is corrected via `merge` before `video.md` is written — this recheck path has caught real errors in measurement: an 11-minute video's `100`↔`200` value disagreement, corrected before render; on a 32-minute video, cross-check flagged 9 disagreements, of which 1 was a real misread (`108.00`↔`105.00` KiB/s, corrected) and 8 confirmed the value was already accurate.
+`evidence.py --cross-check` re-reads hashed and numeric values across `visual_evidence`, `claims`, and `knowledge_items` looking for internal disagreement — at **zero additional cost**, since it is deterministic post-processing rather than a subagent call. Through v0.11.0, frames it flagged were re-read once by a disposable vision subagent (`haiku`) and the value corrected via `merge` before `video.md` was written — this recheck path caught real errors in measurement: an 11-minute video's `100`↔`200` value disagreement, corrected before render; on a 32-minute video, cross-check flagged 9 disagreements, of which 1 was a real misread (`108.00`↔`105.00` KiB/s, corrected) and 8 confirmed the value was already accurate. **As of v0.13.0 the automatic recheck dispatch is removed** — recent flags measured as false positives across the board, so a flag is now recorded as a count only (`--cross-flags`), not re-verified. See [Lenient validation contract](#9-lenient-validation-contract).
 
 Cross-check cannot catch a reading that is wrong but internally *consistent* — a value nobody disagreed with is not the same as a value someone independently verified. That gap is why `verification.status` defaults to, and effectively stays at, `unaudited` (see [Limitations](#limitations)).
 
@@ -386,6 +400,40 @@ digest, and only new items are merged in.
 Activity-signal targeting still misses **quiet screens** — scenes with typing but little visual
 change or verbal cue, such as editing a `.env` file. See [Limitations](#limitations).
 
+### 8. Selective registration
+
+검수(비전 서브에이전트가 프레임을 읽는 것)는 이전과 동일하게 **전량** 수행된다 — 줄어드는
+것은 **등재**뿐이다. `synthesize.md`는 이제 `vision-*.lines`의 V라인을 전부 patch로
+옮기지 않고, `knowledge_items`/`claims`가 `refs`로 실제 인용하는 V만 옮긴다(`v#`는 patch
+내 등장 순서로 재부여). 인용되지 않은 관측은 버려지지 않는다 — 원본 `vision-*.lines`가
+캐시(`<cache_dir>/`)에 그대로 남아, 정본(`evidence.json`)에 없는 관측을 묻는 후속 질문이
+오면 그때 Read해 지연 로딩한다.
+
+측정(20분 튜토리얼, 도입 전 → 후): 비용 **$5.17 → $2.98(−42%)**, 등재된 V **155 → 21**.
+자세한 수치는 [Measured results](#measured-results) 참고.
+
+### 9. Lenient validation contract
+
+`evidence.py --from-lines`는 더 이상 낱줄(T/V/K/C/G) 하나의 형식 오류로 배치 전체를
+거부하지 않는다. 알 수 없는 레코드 종류만 여전히 즉시 거부하고(스키마 자체가 다르다는
+신호이기 때문), 파싱 가능한 필드가 부족한 낱줄은 **드롭 + 카운트**해 stdout에
+`MERGED ... DROPPED n`으로 보고한다(재전달 대상이 아닌 정보성 보고 — 이전에는 전량 거부가
+재시도 스파이럴로 번졌다). `knowledge_items`/`claims`만 드롭율이 **20%**(`KC_DROP_RATE_GATE`)를
+넘을 때 배치 전체를 `INVALID`로 거부한다 — 이 둘이 실제 지식을 나르고, 드롭율이 높다는 것은
+산발적 오타가 아니라 파일 전체가 잘못된 규약이라는 신호이기 때문이다. 교차 대조가 남기는
+flag도 같은 정책으로 단순화됐다: 비전 서브에이전트를 다시 불러 재판독시키던 루프는 폐지되고
+건수만 `--cross-flags`에 기록된다(최근 flag가 전부 오탐으로 측정됨 — [교차 대조](#4-deterministic-cross-check) 참고).
+
+철학: **완전성 > 문자 정밀도 — 오타는 허용하되, 날조는 구조(blind 전사, [§7](#7-gap-targeted-backfill))로
+차단한다.** 이 관용은 형식 오류에만 적용된다 — 절차 단계를 합치거나 누락하는 것은 관용
+대상이 아니다. `synthesize.md`는 "따라하기 절차의 단계는 합치지 마라 — 단계 하나가 K
+하나다"를 명시한다(같은 사실의 재표현만 병합 허용).
+
+**부수 버그 수정.** 관용 드롭이 v-id에 결번을 남길 수 있게 되면서(예: v1·v3 생존, v2
+드롭) 다음 배치의 id 오프셋을 `len(visual_evidence)`로 계산하던 기존 로직이 이미 존재하는
+id와 충돌하는 버그가 드러났다 — 오프셋 계산을 "기존 v-id 중 최대 숫자" 기준으로 교체해
+수정했다.
+
 ---
 
 ## What the audits have caught
@@ -415,6 +463,7 @@ Every round had to demonstrate no quality regression or be rolled back.
 | **R7 (function-agents, v0.8.0)** | Went the opposite direction from solo — split the single context back into disposable subagents, but this time the orchestrator itself never reads a frame: two `haiku` vision passes read map/zoom frames and vanish, a text-only `sonnet` pass synthesizes knowledge, `haiku` audits coverage, thinking capped to 0 across the whole run | Converged at **$1.55~1.65** (`sonnet` session, `MAX_THINKING_TOKENS=0`), api time **4~5 min** — solo ($2.91) 대비 **-45%**; knowledge 30~36 items, hallucinations 0. Cost gate (≤$1.5) missed by **+3~10%** but accepted by the user; misread gate (0) also missed — **~1 command-spelling misread per video** persisted (small on-screen text) and was accepted as a known limitation — see [Measured results](#measured-results) and [`docs/eval/reports/2026-08-18-function-agents.md`](docs/eval/reports/2026-08-18-function-agents.md) |
 | **R8 (long-video, v0.9.1)** | Fixed per-run caps were starving videos over 20 minutes — made map, zoom, and knowledge budgets scale with duration instead of a flat number, and made `video.md` render as chronological chapter sections when the source has 3+ chapters, regardless of video length | Same 32-minute video: knowledge **33 → 76 items** (0.9 → 2.35/min, back in range with the 11-minute baseline), gaps **15 → 0**, **24 chapter sections**; cost **$3.77** (+7.7% over the $3.50 gate, but cheaper per minute than the 11-minute video); 11-minute baseline unchanged — see [Measured results](#measured-results) and [`docs/eval/reports/2026-08-19-long-video.md`](docs/eval/reports/2026-08-19-long-video.md) |
 | **R9 (gap-backfill, v0.11.0)** | Added a gap-targeted backfill stage for videos over 20 minutes — deterministic frame-timestamp arithmetic finds gaps over 90 seconds (code-gated, so shorter videos are unaffected), targets each gap's activity-signal peak instead of its midpoint, caps the result at 12 frames, and transcribes those frames **blind** (no captions given) | 50-minute Docker code-along tutorial: recovered the full backend Dockerfile, the `docker exec` `/bin/bash` argument, and the frontend Dockerfile — all screen-only, missing from captions. Confabulation **0/3** (frames verified directly). Cost **+$1–2** when the stage triggers ($5.72 measured at the prior 16-frame cap; **$4.6–4.9 estimated, unmeasured** at the current 12-frame cap) — see [`docs/eval/reports/2026-08-19-gap-backfill.md`](docs/eval/reports/2026-08-19-gap-backfill.md) |
+| **R10 (selective-reg, v0.13.0)** | Registered only the observations `knowledge_items`/`claims` actually cite instead of copying every V-line, added a lenient format-drop contract for T/V/K/C/G lines (reject-the-whole-batch → drop + count, gated only on a K/C drop rate over 20%), fixed an id-offset bug the lenient drop surfaced, and replaced cross-check's automatic recheck dispatch with count-only flag recording | 20-minute video: cost **$5.17 → $2.98 (−42%)**, registered V **155 → 21**; knowledge-retention gate missed (37/44, 71%) but a **$0.4** isolation experiment traced the shortfall to upstream transcript-density variance (125↔42 lines, same video) rather than to the registration change — merged on that basis, variance tracked as an open limitation — see [Measured results](#measured-results) and [`docs/eval/reports/2026-08-21-selective-reg.md`](docs/eval/reports/2026-08-21-selective-reg.md) |
 
 <details>
 <summary><b>Lessons worth keeping</b></summary>
@@ -473,6 +522,11 @@ See [`docs/eval/golden-set-protocol.md`](docs/eval/golden-set-protocol.md).
   보강의 activity 신호 조준으로도 잡히지 않는다. 그런 장면이 공백 안에 있으면 회수되지
   않으며, 남은 공백은 산출물에 그대로 보고된다(실측:
   [`docs/eval/reports/2026-08-19-gap-backfill.md`](docs/eval/reports/2026-08-19-gap-backfill.md)).
+- 전사 밀도가 실행 간 요동한다 — 같은 영상, 같은 프롬프트에서도 확대 전사가 **125줄 ↔
+  42줄**로 3배 가까이 차이 난 사례가 실측됐다(선별 등재 게이트, 2026-08-21). 이 요동은
+  지식량을 최대 **±30%** 흔들 수 있고, 이 브랜치의 변경과 무관하게 v0.11.0부터 존재해온
+  조건이다 — 원인 분리는 됐으나 해결은 아직이라 다음 라운드의 표적으로 남겨둔다(실측:
+  [`docs/eval/reports/2026-08-21-selective-reg.md`](docs/eval/reports/2026-08-21-selective-reg.md)).
 
 ---
 
@@ -524,6 +578,6 @@ If a tutorial breaks `tuto`, a public video URL and the missed timestamp are esp
 
 **If tuto saves you from scrubbing a video frame by frame, consider giving the repo a ⭐.**
 
-<sub>Built as a Claude Code plugin · 333 tests passing</sub>
+<sub>Built as a Claude Code plugin · 352 tests passing</sub>
 
 </div>
