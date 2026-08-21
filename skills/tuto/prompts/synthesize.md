@@ -21,9 +21,10 @@ G	350.0	469.0	지도 공백
 ```
 
 - 첫 줄 T: 영상유형·확신도·근거 한 줄.
-- **V: vision-*.lines의 V라인을 그대로 전부 복사한다** (vision-map → vision-zoom 순).
-  id는 등장 순서대로 v1..vN 자동 부여 — 네가 id를 쓰지 않는다. `⚠️` 라인도
-  복사한다(확인이 필요하다는 사실 자체가 기록이다).
+- **V: 인용 V만 복사** — K/C가 refs로 참조하는 V만 patch에 옮긴다(v#는 patch 내
+  등장 순서로 v1..vN 자동 부여 — 네가 id를 쓰지 않는다). 인용하지 않은 관측은
+  옮기지 않는다 — 원본 vision-*.lines가 캐시에 남아 나중에 찾을 수 있다. `⚠️`
+  라인도 인용되면 복사한다(확인이 필요하다는 사실 자체가 기록이다).
 - K(지식): type은 concept·procedure·action·command·setting·prerequisite·result·
   criterion·warning·example·comparison. content는 행동 가능한 수준으로
   ("Add Python to PATH를 체크한다"). refs는 `;` 구분 — `v#`(위 V 순번)·`t#`(자막
@@ -50,8 +51,9 @@ G	350.0	469.0	지도 공백
 ## 보강 모드
 
 보강 모드(디스패치가 명시): coverage-digest와 입력으로 주어진 gap*.lines 전부(분할
-됐으면 gap2.lines 등 전부) 입력 — **digest에 이미 있는 지식은 쓰지 않는다.** V는
-gap*.lines 전부 복사, K/C는 신규만. 나머지 규칙 동일.
+됐으면 gap2.lines 등 전부) 입력 — **digest에 이미 있는 지식은 쓰지 않는다.** V도
+동일 원칙(**인용 V만 복사**) — 신규 K/C가 인용하는 V만 옮긴다. K/C는 신규만.
+나머지 규칙 동일.
 
 ## 최종 응답은 한 줄이다
 

@@ -129,3 +129,31 @@ class TestOrchestratorContract:
         # Task 2 리뷰 F1(Critical): 7.5③이 합성 입력을 gap.lines만 명시하면 12장 초과
         # 2배치 분할 시 gap2.lines가 합성에서 무통보 누락된다 — 전부 넘기라고 못 박는다.
         assert "gap2.lines까지 전부" in TEXT
+
+
+class TestSelectiveRegistrationContract:
+    # 선별 등재(selective-reg) Task 2(2026-08-21): 정본 등재를 "인용 V만"으로 좁히며
+    # 하류 배선 3곳을 바꿨다 — 관용 드롭 보고 경로, 교차 대조 재확인 디스패치 폐지,
+    # 후속 질문의 지연 로딩. 이 배선이 SKILL.md에 실제로 반영됐는지 고정한다.
+
+    def test_dropped_reported_via_note(self):
+        # Task 1(evidence.py)이 stdout에 내는 `DROPPED n`을 8단계 --note로 보고하라는
+        # 지시가 있어야 한다 — 없으면 관용 드롭 건수가 사용자에게 그냥 사라진다.
+        # 리뷰 Minor: "n>0일 때만" 조건절도 별도로 고정해 무조건 --note를 붙이는
+        # 회귀(0건일 때도 잡음 섞인 --note)를 잡는다.
+        assert "DROPPED" in TEXT
+        assert "형식 드롭" in TEXT
+        assert "n>0일 때만" in TEXT
+
+    def test_cross_check_flag_no_recheck_dispatch(self):
+        # 구 6단계는 CROSSCHECK flag가 나오면 비전 재확인(haiku)을 디스패치했다 — 관용
+        # 정책으로 폐지했으니 그 트리거 문구가 없어야 한다. "비전 재확인"은 후속 질문
+        # 절(캐시 재질의, 근거 부족 시)에서만 살아남아야 하므로 정확히 1회여야 한다.
+        assert "재확인 디스패치 없이" in TEXT
+        assert TEXT.count("비전 재확인") == 1
+
+    def test_followup_lazy_loads_vision_lines(self):
+        # 인용되지 않은 관측은 evidence.json에 없다 — 후속 질문이 그걸 물으면 캐시의
+        # vision-*.lines를 그때 Read하라는 지연 로딩 절이 있어야 한다.
+        assert "정본에 없는 관측을 물으면" in TEXT
+        assert "vision-*.lines를 그때 Read" in TEXT

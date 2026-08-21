@@ -48,8 +48,13 @@ class TestSynthesizeContract:
         assert "conflict=" in SYNTHESIZE
         assert "우선" in SYNTHESIZE
 
-    def test_copies_all_v_lines(self):
-        assert "그대로 전부 복사" in SYNTHESIZE
+    def test_copies_cited_v_lines_only(self):
+        # 선별 등재 Task 2: 하류 곱수 제거 — "V 전부 복사" 계약을 "인용 V만 복사"로
+        # 축소했다(구 test_copies_all_v_lines의 "그대로 전부 복사" 단언은 이 축소와
+        # 직접 충돌해 갱신한다 — Global Constraints의 사전 선언 예외).
+        assert "인용 V만 복사" in SYNTHESIZE
+        assert "인용하지 않은 관측은" in SYNTHESIZE
+        assert "캐시에 남아" in SYNTHESIZE
 
     def test_refs_syntax(self):
         assert "v#" in SYNTHESIZE and "t#" in SYNTHESIZE
