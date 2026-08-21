@@ -35,6 +35,7 @@
    기대한다.
 
    type: slide|ui|chart|code|table|text|other · confidence: high|medium|low
+   — **목록 밖 단어(diagram 등) 금지**: 다이어그램·그래프는 chart로 적는다.
 4. **모드=지도일 때만** 확대 지점을 고른다(영상 길이는 자막 파일 첫머리
    `STATUS duration=` 값으로 판단한다):
    ① 값 밀도(터미널·설정창·표·코드) 상위 3~4곳(영상 20분 초과면 6곳) ② 지시어 큐 시점 우선

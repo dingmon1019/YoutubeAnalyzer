@@ -64,8 +64,10 @@ NOTE(yt-dlp 최신성·JS 런타임 부재)는 사용자에게 한 줄 알린다
 `evidence.py "<cache_dir>" --from-lines "<cache_dir>/patch.lines" --cross-check` 한 호출 —
 기존 `--merge` 스키마 검증 게이트를 그대로 통과해야 한다. stdout의 `DROPPED n`은
 8단계 `--note "형식 드롭 n건"`으로 보고할 뿐 재전달 대상이 아니다(n>0일 때만). exit 2
-INVALID(스키마 검증 실패든 K/C 드롭율 20% 초과든)는 stderr 줄 그대로 합성 에이전트에
-재전달해 1회 수정시킨다(파일 수정도 에이전트가 한다). CROSSCHECK 출력은
+INVALID(스키마 검증 실패든 K/C 드롭율 20% 초과든)는 stderr의
+**INVALID 전체 목록을 한 번에** 합성 에이전트에 재전달해 1회 수정시키고(파일
+수정도 에이전트가 한다), 재전달 후에는 **완료 알림만 기다린다**
+(타이머·폴링·ScheduleWakeup 금지). CROSSCHECK 출력은
 v-id·kind·값쌍뿐 프레임명이 없다 — flag는 **재확인 디스패치 없이** 건수만 기억해
 8단계 `--cross-flags`에 그대로 넣는다.
 

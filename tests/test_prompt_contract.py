@@ -207,3 +207,15 @@ class TestDensitySelfCheckContract:
 
     def test_self_check_remediation(self):
         assert "각 프레임을 다시 개별로 보며 빠뜨린 값을 보충한 뒤" in TRANSCRIBE
+
+
+class TestVisionTypeEnumStrengthenedContract:
+    # 전사 밀도 안정화 Task 1b(2026-08-21): 실측 게이트에서 haiku가 enum 밖
+    # `diagram`을 17건 출력해 merge가 전량 거부됐다 — type 줄에 목록 밖 단어
+    # 금지를 강화한다(evidence.py가 별칭으로 흡수하지만 애초에 덜 내야 싸다).
+    def test_out_of_enum_word_forbidden(self):
+        assert "목록 밖 단어" in TRANSCRIBE
+        assert "diagram" in TRANSCRIBE
+
+    def test_diagram_graph_map_to_chart_guidance(self):
+        assert "다이어그램" in TRANSCRIBE and "그래프" in TRANSCRIBE

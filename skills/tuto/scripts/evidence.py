@@ -31,6 +31,12 @@ SCHEMA_VERSION = "0.3"
 VIDEO_TYPES = ("tutorial", "presentation", "interview", "lecture",
                "demo", "screen-recording", "mixed", "unknown")
 EVIDENCE_TYPES = ("slide", "ui", "chart", "code", "table", "text", "other")
+# V type 별칭 — 게이트 실패 흡수(Task 1b, 실측 nHcfoHOW4uA): 비전(haiku)이 enum
+# 밖 단어를 17건 출력해 merge가 전량 거부됐다. 라벨 오류로 실제 관측을 버리지
+# 않는다 — 별칭에 있으면 매핑하고, 없으면 EVIDENCE_TYPES 중 "other"로 강제한다
+# (드롭하지 않는다, 아래 expand_lines 참고).
+EVIDENCE_TYPE_ALIASES = {"diagram": "chart", "graph": "chart",
+                         "terminal": "code", "screenshot": "ui"}
 CONFIDENCE = ("high", "medium", "low")
 VERIFY_STATUS = ("verified", "disputed", "unverifiable", "unaudited")
 EVIDENCE_SOURCES = ("transcript", "frame")
@@ -498,11 +504,22 @@ def expand_lines(text: str, id_offset: int = 0) -> dict:
     v{id_offset+1}..부터 부여해 기존 v-id와 충돌하지 않게 하고, 같은 배치의 K/C가
     쓰는 로컬 v# 참조도 같은 오프셋으로 재매핑한다(LLM은 항상 로컬 v1..vN으로
     쓴다). **V가 드롭돼도 vn은 그대로 증가한다** — 하류 K/C의 로컬 v# 참조는 위치
-    기준이라, 드롭이 번호를 밀면 드롭과 무관한 뒤쪽 V들의 id가 전부 어긋난다."""
+    기준이라, 드롭이 번호를 밀면 드롭과 무관한 뒤쪽 V들의 id가 전부 어긋난다.
+
+    **정규화(관용 정책의 확장, Task 1b, 실측 nHcfoHOW4uA 게이트 실패 흡수)**:
+    라벨 오류로 실제 관측을 버리지 않는다. V의 type이 enum 밖이면 드롭하는 대신
+    `EVIDENCE_TYPE_ALIASES`로 매핑하고(없으면 "other"로 강제) 정규화 건수를
+    센다 — 이게 없으면 merge 단계의 validate()가 스키마 위반으로 **배치 전체를**
+    거부한다(실측: diagram 17건이 그 원인이었다). K는 6필드이고 5번째 필드
+    (0-기준 4)가 정확히 high|medium|low면 잉여 confidence로 보고 제거한 뒤 5필드로
+    처리한다(실측: 합성이 refs와 content 사이에 confidence를 끼워 넣어 content가
+    "high"로 오배선됐다). 그 외 필드 수 오류는 여전히 드롭+카운트다. 정규화 건수는
+    `_line_stats["normalized"]`에 담겨 조용히 삼켜지지 않고 CLI stdout에 보고된다."""
     patch = {"visual_evidence": [], "claims": [], "knowledge_items": [], "gaps": []}
     vn = 0
     attempted = {"T": 0, "V": 0, "K": 0, "C": 0, "G": 0}
     dropped = {"T": 0, "V": 0, "K": 0, "C": 0, "G": 0}
+    normalized = {"T": 0, "V": 0, "K": 0, "C": 0, "G": 0}
     for ln, raw in enumerate(text.splitlines(), 1):
         if not raw.strip():
             continue
@@ -517,13 +534,25 @@ def expand_lines(text: str, id_offset: int = 0) -> dict:
             if kind == "T":
                 patch["video_type"] = {"primary": f[1], "confidence": f[2], "basis": f[3]}
             elif kind == "V":
+                vtype = f[1]
+                if vtype not in EVIDENCE_TYPES:
+                    vtype = EVIDENCE_TYPE_ALIASES.get(vtype, "other")
+                    normalized["V"] += 1
                 patch["visual_evidence"].append({
-                    "id": f"v{id_offset + vn}", "type": f[1], "timestamp": float(f[2]),
+                    "id": f"v{id_offset + vn}", "type": vtype, "timestamp": float(f[2]),
                     "frame": f[3], "confidence": f[4], "value": f[5]})
             elif kind == "K":
+                kf = f
+                if len(kf) == 6 and kf[4] in CONFIDENCE:
+                    # 잉여 confidence(refs와 content 사이에 낀 5번째 필드) 흡수 —
+                    # 그 필드만 버리고 나머지를 5필드 규약대로 재배열한다.
+                    kf = kf[:4] + kf[5:]
+                    normalized["K"] += 1
+                if len(kf) != 5:
+                    raise ValueError(f"K 필드 수 {len(kf)} != 5")
                 patch["knowledge_items"].append({
-                    "type": f[1], "timestamp": float(f[2]),
-                    "evidence": _parse_refs(f[3], id_offset), "content": f[4]})
+                    "type": kf[1], "timestamp": float(kf[2]),
+                    "evidence": _parse_refs(kf[3], id_offset), "content": kf[4]})
             elif kind == "C":
                 c = {"timestamp": float(f[1]), "evidence": _parse_refs(f[2], id_offset),
                      "claim": f[3], "verification": {"status": "unaudited"}}
@@ -539,7 +568,7 @@ def expand_lines(text: str, id_offset: int = 0) -> dict:
             # 낱줄 사유를 재전달하지 않고 DROPPED n 집계로만 보고하기로 했다.
             dropped[kind] += 1
             continue
-    patch["_line_stats"] = {"attempted": attempted, "dropped": dropped}
+    patch["_line_stats"] = {"attempted": attempted, "dropped": dropped, "normalized": normalized}
     return patch
 
 
@@ -1177,7 +1206,8 @@ def main() -> int:
             # 넘는지만 여기서 심판한다 — 넘으면 산발적 오타가 아니라 파일 전체가
             # 잘못된 규약이라는 신호이므로 기존처럼 배치 전체를 거부한다(부분 병합
             # 없음 — 재개 계약을 지킨다).
-            from_lines_stats = expanded.pop("_line_stats", {"attempted": {}, "dropped": {}})
+            from_lines_stats = expanded.pop(
+                "_line_stats", {"attempted": {}, "dropped": {}, "normalized": {}})
             # 게이트 메시지는 레코드종류 문자("K"/"C") 대신 실제 스키마 필드명을 쓴다 —
             # SKILL.md 4단계의 기존 라우팅 규칙(visual_evidence→전사 / knowledge_items·
             # claims→합성)에 자연히 걸리게 하기 위함이다(dense 브랜치 8678bbd 재리뷰).
@@ -1196,6 +1226,7 @@ def main() -> int:
                 print("REJECTED: evidence.json은 변경되지 않았다", file=sys.stderr)
                 return 2
             from_lines_dropped = sum(from_lines_stats["dropped"].values())
+            from_lines_normalized = sum(from_lines_stats.get("normalized", {}).values())
             candidate = merge(candidate, expanded)
         if args.merge:
             candidate = merge(candidate, json.loads(Path(args.merge).read_text(encoding="utf-8")))
@@ -1214,7 +1245,12 @@ def main() -> int:
             # DROPPED 표기(정책 재정): 형식이 어긋나 드롭된 낱줄 수를 오케스트레이터가
             # 6단계 --note에 그대로 실어 보고할 수 있게 stdout에 남긴다. 재시도 대상이
             # 아니라는 점이 핵심이므로 여기서는 개수만 — 사유별 내역은 남기지 않는다.
-            print(f"MERGED 1개 파일 — DROPPED {from_lines_dropped}")
+            # NORMALIZED 병기(Task 1b): V type 별칭·K stray confidence 정규화 건수 —
+            # 조용히 변조하지 않고 드러낸다. 0건이면 잡음이므로 붙이지 않는다.
+            msg = f"MERGED 1개 파일 — DROPPED {from_lines_dropped}"
+            if from_lines_normalized > 0:
+                msg += f" NORMALIZED {from_lines_normalized}"
+            print(msg)
 
     if args.cross_check:
         flags = cross_check_values(ev)

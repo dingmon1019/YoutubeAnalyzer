@@ -1766,3 +1766,115 @@ def test_expand_lines_id_offset_param_is_max_id_not_count():
     v3이 되어 기존 v3과 충돌했을 것이다."""
     p = evidence.expand_lines("V\tui\t9.0\tf9.jpg\thigh\t새값\n", id_offset=3)
     assert p["visual_evidence"][0]["id"] == "v4"
+
+
+# ── Task 1b: 게이트 실패 흡수 (실측 통합 게이트, nHcfoHOW4uA, 2026-08-21) ──
+#
+# ① 비전(haiku)이 V type에 enum 밖 `diagram`을 17건 출력 → merge가 17건 전량
+#   거부(지식 손실 + 수정 왕복 3회 = 비용 5배). ② 합성(sonnet)이 K 5필드에
+# confidence를 refs와 content 사이에 끼워 6필드로 출력 → K 100% 드롭(사실상
+# 지식 손실 — 원 코드는 confidence를 content로 오배선해 조용히 값을 날린다).
+# 관용 정책 일관 적용: 라벨 오류로 실제 관측을 버리지 않는다 — 드롭 대신
+# 정규화하고, 정규화 건수는 조용히 삼키지 않고 반드시 보고한다.
+
+def test_expand_lines_normalizes_out_of_enum_v_type_diagram_to_chart():
+    """실측 게이트 회귀 고정: diagram 17건이 전량 거부되지 않고 chart로 정규화돼
+    생존해야 한다 — 드롭 0, normalized 17."""
+    lines = "".join(
+        f"V\tdiagram\t{float(i)}\tf{i}.jpg\thigh\t다이어그램 값{i}\n" for i in range(17)
+    )
+    p = evidence.expand_lines(lines)
+    assert len(p["visual_evidence"]) == 17
+    assert all(v["type"] == "chart" for v in p["visual_evidence"])
+    assert p["_line_stats"]["dropped"]["V"] == 0
+    assert p["_line_stats"]["normalized"]["V"] == 17
+
+
+def test_expand_lines_v_type_aliases_and_unknown_fallback_to_other():
+    """별칭 맵(diagram/graph->chart, terminal->code, screenshot->ui)에 없는 미지
+    type은 드롭하지 않고 other로 강제한다 — 어느 쪽이든 드롭하지 않는다."""
+    lines = (
+        "V\tgraph\t1.0\tf1.jpg\thigh\t그래프값\n"
+        "V\tterminal\t2.0\tf2.jpg\thigh\t터미널값\n"
+        "V\tscreenshot\t3.0\tf3.jpg\thigh\t스크린샷값\n"
+        "V\tmystery\t4.0\tf4.jpg\thigh\t미지값\n"
+    )
+    p = evidence.expand_lines(lines)
+    types = [v["type"] for v in p["visual_evidence"]]
+    assert types == ["chart", "code", "ui", "other"]
+    assert p["_line_stats"]["dropped"]["V"] == 0
+    assert p["_line_stats"]["normalized"]["V"] == 4
+
+
+def test_expand_lines_v_type_already_valid_is_not_counted_as_normalized():
+    """이미 유효한 enum 값(예: ui)은 정규화 대상이 아니다 — normalized 카운트가
+    거짓으로 올라가면 안 된다."""
+    p = evidence.expand_lines("V\tui\t1.0\tf1.jpg\thigh\t정상값\n")
+    assert p["visual_evidence"][0]["type"] == "ui"
+    assert p["_line_stats"]["normalized"]["V"] == 0
+
+
+def test_expand_lines_k_six_field_stray_confidence_normalizes_to_five():
+    """실측 게이트 회귀 고정: K 5필드(K/type/초/refs/content)에 confidence가
+    refs와 content 사이에 끼어 6필드가 되면 — 5번째 필드(0-기준 4)가 정확히
+    high|medium|low일 때만 그 필드를 제거하고 5필드로 정상 파싱한다."""
+    line = "K\tsetting\t12.5\tv1\thigh\tCUDA 12.6 필요\n"
+    p = evidence.expand_lines(line)
+    assert len(p["knowledge_items"]) == 1
+    item = p["knowledge_items"][0]
+    assert item["type"] == "setting"
+    assert item["timestamp"] == 12.5
+    assert item["content"] == "CUDA 12.6 필요"
+    assert p["_line_stats"]["dropped"]["K"] == 0
+    assert p["_line_stats"]["normalized"]["K"] == 1
+
+
+def test_expand_lines_k_six_field_non_confidence_fifth_field_still_dropped():
+    """5번째 필드가 high|medium|low가 아니면 정규화 대상이 아니다 — 그 외 필드
+    수 오류는 기존 관용 규칙(드롭+보고)을 그대로 유지한다."""
+    text = (
+        "K\tcommand\t1.0\tv1\t좋은명령\n"           # 정상 5필드
+        "K\tsetting\t2.0\tv1\t뭔가\t추가필드\n"     # 6필드지만 5번째가 confidence 아님 -> 드롭
+    )
+    p = evidence.expand_lines(text)
+    assert len(p["knowledge_items"]) == 1
+    assert p["knowledge_items"][0]["content"] == "좋은명령"
+    assert p["_line_stats"]["attempted"]["K"] == 2
+    assert p["_line_stats"]["dropped"]["K"] == 1
+    assert p["_line_stats"]["normalized"]["K"] == 0
+
+
+def test_cli_from_lines_normalized_count_reported_in_merged_line(tmp_path):
+    """조용한 변조 금지: 정규화가 일어나면 stdout의 `MERGED ... DROPPED n`에
+    `NORMALIZED n`이 병기돼야 한다."""
+    ev = evidence.register_frames(_skel(), ["f1.jpg", "f2.jpg"])
+    evidence.save(tmp_path, ev)
+    text = (
+        "V\tdiagram\t1.0\tf1.jpg\thigh\t값1\n"   # 별칭 정규화 -> chart
+        "V\tui\t2.0\tf2.jpg\thigh\t값2\n"        # 정상, 정규화 아님
+    )
+    patch_file = tmp_path / "patch.lines"
+    patch_file.write_text(text, encoding="utf-8")
+
+    p = _run([str(tmp_path), "--from-lines", str(patch_file)])
+    assert p.returncode == 0, f"stdout={p.stdout}\nstderr={p.stderr}"
+    assert "DROPPED 0" in p.stdout
+    assert "NORMALIZED 1" in p.stdout
+
+    merged = evidence.load(tmp_path)
+    assert {v["type"] for v in merged["visual_evidence"]} == {"chart", "ui"}
+
+
+def test_cli_from_lines_normalized_absent_from_stdout_when_zero(tmp_path):
+    """정규화 0건이면 MERGED 라인에 NORMALIZED가 아예 나오지 않는다 — 무조건
+    붙이는 회귀(0건에도 잡음 섞인 보고)를 잡는다."""
+    ev = evidence.register_frames(_skel(), ["f1.jpg"])
+    evidence.save(tmp_path, ev)
+    text = "V\tui\t1.0\tf1.jpg\thigh\t값1\n"
+    patch_file = tmp_path / "patch.lines"
+    patch_file.write_text(text, encoding="utf-8")
+
+    p = _run([str(tmp_path), "--from-lines", str(patch_file)])
+    assert p.returncode == 0, f"stdout={p.stdout}\nstderr={p.stderr}"
+    assert "DROPPED 0" in p.stdout
+    assert "NORMALIZED" not in p.stdout

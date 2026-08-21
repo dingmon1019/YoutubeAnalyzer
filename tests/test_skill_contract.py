@@ -173,3 +173,14 @@ class TestDensityDispatchRetryContract:
 
     def test_low_density_note_present(self):
         assert '저밀도 전사 n/장' in TEXT
+
+
+class TestGateFailureRetryContract:
+    # 전사 밀도 안정화 Task 1b(2026-08-21): 실측 통합 게이트(nHcfoHOW4uA)에서 6단계
+    # INVALID 재전달이 왕복 3회로 번졌다 — 전체 목록을 한 번에 전달하고 완료
+    # 알림만 기다리게(폴링·타이머 금지) 절차를 강화한다.
+    def test_invalid_forwarded_all_at_once(self):
+        assert "INVALID 전체 목록을 한 번에" in TEXT
+
+    def test_no_polling_after_forward(self):
+        assert "타이머·폴링·ScheduleWakeup 금지" in TEXT
