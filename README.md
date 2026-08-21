@@ -11,9 +11,9 @@ Turn YouTube videos into **verified working knowledge** for AI agents — transc
 AI가 대신 영상을 보고, 자막과 화면을 함께 이해하고, 검증된 지식으로 변환합니다.
 이후 AI는 그 내용을 설명하거나 질문에 답하고, 현재 작업과 비교하거나 튜토리얼을 따라 할 수 있습니다.
 
-[![Version](https://img.shields.io/badge/version-0.9.1-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
+[![Version](https://img.shields.io/badge/version-0.11.0-blue.svg)](https://github.com/dingmon1019/YoutubeAnalyzer/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-306%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-333%20passed-brightgreen.svg)](tests/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://claude.com/claude-code)
 [![Languages](https://img.shields.io/badge/video-KO%20%7C%20EN-orange.svg)](#)
 
@@ -241,7 +241,7 @@ Read하지 않음) 실측: 11분 27초 한국어 튜토리얼 1편, sonnet 세�
 | **Download + analysis** | **8.1× faster** | 154s → 19s |
 | **Zoom extraction** | **5.4× faster** | 327s → 61s |
 | **Audit escalation** | **0%** | On the selected audit model |
-| **Tests** | **306 passing** | Current regression suite (`python -m pytest tests/ -q`) |
+| **Tests** | **333 passing** | Current regression suite (`python -m pytest tests/ -q`) |
 
 **Why total cost falls less than `cache_write`:** `cache_read` scales with how much conversation
 already precedes the run, not with the pipeline. Between the two measurements above it went
@@ -276,6 +276,15 @@ gaps down from **15 to 0** and `video.md` rendering as **24 chapter sections**. 
 per knowledge item**, under the $0.05 reference target. The 11-minute baseline is unchanged by this
 work ($1.55–1.65, 30–36 knowledge items). Full numbers:
 [`docs/eval/reports/2026-08-19-long-video.md`](docs/eval/reports/2026-08-19-long-video.md).
+
+**v0.11.0 gap-targeted backfill, measured (50:38 Docker code-along tutorial).** The backfill
+stage recovered information that existed only on screen and never in captions: the backend
+Dockerfile in full (`FROM python:3.12-slim` … `CMD ["uvicorn", ...]`), the `/bin/bash` argument
+to `docker exec`, and the frontend Dockerfile. Confabulation held at **0** — all 3 recovered
+frames were checked directly against the source frames. Cost rises **roughly $1–2** when the
+stage triggers; the measured run came to **$5.72** under the prior 16-frame cap. The cap has
+since been lowered to 12 frames, which is estimated (**not yet remeasured**) at **$4.6–4.9**.
+Full numbers: [`docs/eval/reports/2026-08-19-gap-backfill.md`](docs/eval/reports/2026-08-19-gap-backfill.md).
 
 See [`docs/eval/`](docs/eval/) for the evaluation protocol and cost-accounting tool.
 
@@ -318,7 +327,11 @@ Text-heavy frames such as slides, tables, menus, and terminals are extracted at 
 
 ### 3. Gap detection
 
-Low-motion verification sections near the end of tutorials are easy for samplers to miss. `tuto` explicitly revisits gaps of **60 seconds or more**. This rule was added after two measured runs omitted entire conclusion sections.
+Low-motion verification sections near the end of tutorials are easy for samplers to miss —
+`tuto` explicitly revisits gaps rather than trusting uniform or scene-change sampling alone. This
+rule was added after two measured runs omitted entire conclusion sections. It started as a flat,
+always-on 60-second threshold; it is now a duration-gated, activity-targeted stage with its own
+measured results — see [Gap-targeted backfill](#7-gap-targeted-backfill) below.
 
 ### 4. Deterministic cross-check
 
@@ -355,6 +368,24 @@ tell the model to keep extracting. Adding an explicit **1.5 items/min floor as a
 same video to 76 items (2.35/min) on the next run. See [Measured results](#measured-results) for
 the full before/after.
 
+### 7. Gap-targeted backfill
+
+Videos over 20 minutes get one more pass after the standard pipeline. `evidence.py --gap-plan`
+computes gaps over **90 seconds** deterministically from frame timestamps — both this threshold
+and the 20-minute trigger are enforced in code, not in prose, so shorter videos incur no extra
+cost. Each gap is targeted at its **activity-signal peak** rather than its midpoint, and the
+result is capped at **12 frames**, longest gaps first if that cap would be exceeded.
+
+Those frames are then transcribed **blind** — the transcription pass receives the frame paths but
+not the caption transcript, so it has no caption context to backfill screen content from. This is
+a structural defense against confabulation: the same model that fabricated two values when given
+captions produced zero fabrications once captions were withheld (see
+[Measured results](#measured-results)). The result is checked against the existing knowledge
+digest, and only new items are merged in.
+
+Activity-signal targeting still misses **quiet screens** — scenes with typing but little visual
+change or verbal cue, such as editing a `.env` file. See [Limitations](#limitations).
+
 ---
 
 ## What the audits have caught
@@ -383,6 +414,7 @@ Every round had to demonstrate no quality regression or be rolled back.
 | **R6 (solo)** | Removed delegation entirely — the orchestrator runs MAP through CROSS-CHECK itself instead of handing frame-reading and document-writing to separate agents; removed sample audits, leaving deterministic cross-check plus a single `haiku` coverage-audit call as the only verification | Sample audits corrected **0 / 24** verdicts across 4 videos before removal — basis for cutting them; solo cost/time: **$2.91 · 12.1 min (opus session, measured 2026-08-18; $1.5 target missed, accepted)** — see [Measured results](#measured-results) |
 | **R7 (function-agents, v0.8.0)** | Went the opposite direction from solo — split the single context back into disposable subagents, but this time the orchestrator itself never reads a frame: two `haiku` vision passes read map/zoom frames and vanish, a text-only `sonnet` pass synthesizes knowledge, `haiku` audits coverage, thinking capped to 0 across the whole run | Converged at **$1.55~1.65** (`sonnet` session, `MAX_THINKING_TOKENS=0`), api time **4~5 min** — solo ($2.91) 대비 **-45%**; knowledge 30~36 items, hallucinations 0. Cost gate (≤$1.5) missed by **+3~10%** but accepted by the user; misread gate (0) also missed — **~1 command-spelling misread per video** persisted (small on-screen text) and was accepted as a known limitation — see [Measured results](#measured-results) and [`docs/eval/reports/2026-08-18-function-agents.md`](docs/eval/reports/2026-08-18-function-agents.md) |
 | **R8 (long-video, v0.9.1)** | Fixed per-run caps were starving videos over 20 minutes — made map, zoom, and knowledge budgets scale with duration instead of a flat number, and made `video.md` render as chronological chapter sections when the source has 3+ chapters, regardless of video length | Same 32-minute video: knowledge **33 → 76 items** (0.9 → 2.35/min, back in range with the 11-minute baseline), gaps **15 → 0**, **24 chapter sections**; cost **$3.77** (+7.7% over the $3.50 gate, but cheaper per minute than the 11-minute video); 11-minute baseline unchanged — see [Measured results](#measured-results) and [`docs/eval/reports/2026-08-19-long-video.md`](docs/eval/reports/2026-08-19-long-video.md) |
+| **R9 (gap-backfill, v0.11.0)** | Added a gap-targeted backfill stage for videos over 20 minutes — deterministic frame-timestamp arithmetic finds gaps over 90 seconds (code-gated, so shorter videos are unaffected), targets each gap's activity-signal peak instead of its midpoint, caps the result at 12 frames, and transcribes those frames **blind** (no captions given) | 50-minute Docker code-along tutorial: recovered the full backend Dockerfile, the `docker exec` `/bin/bash` argument, and the frontend Dockerfile — all screen-only, missing from captions. Confabulation **0/3** (frames verified directly). Cost **+$1–2** when the stage triggers ($5.72 measured at the prior 16-frame cap; **$4.6–4.9 estimated, unmeasured** at the current 12-frame cap) — see [`docs/eval/reports/2026-08-19-gap-backfill.md`](docs/eval/reports/2026-08-19-gap-backfill.md) |
 
 <details>
 <summary><b>Lessons worth keeping</b></summary>
@@ -437,6 +469,10 @@ See [`docs/eval/golden-set-protocol.md`](docs/eval/golden-set-protocol.md).
   영상에서 교차 대조가 `100`↔`200` 오독 1건을 재확인으로 정정, 32분 영상에서는 flag 9건 중
   1건이 실제 오독으로 판정돼 정정됨 — `108`→`105` KiB/s, 나머지 8건은 정확 확인) 완전히
   막지는 못한다.
+- **"조용한 화면"**(타이핑만 있고 화면 변화·언급이 적은 장면 — 예: `.env` 편집)은 공백 표적
+  보강의 activity 신호 조준으로도 잡히지 않는다. 그런 장면이 공백 안에 있으면 회수되지
+  않으며, 남은 공백은 산출물에 그대로 보고된다(실측:
+  [`docs/eval/reports/2026-08-19-gap-backfill.md`](docs/eval/reports/2026-08-19-gap-backfill.md)).
 
 ---
 
@@ -488,6 +524,6 @@ If a tutorial breaks `tuto`, a public video URL and the missed timestamp are esp
 
 **If tuto saves you from scrubbing a video frame by frame, consider giving the repo a ⭐.**
 
-<sub>Built as a Claude Code plugin · 306 tests passing</sub>
+<sub>Built as a Claude Code plugin · 333 tests passing</sub>
 
 </div>

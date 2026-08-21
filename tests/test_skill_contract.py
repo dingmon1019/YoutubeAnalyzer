@@ -119,3 +119,13 @@ class TestOrchestratorContract:
 
     def test_no_echo_of_artifacts(self):
         assert "echo" in TEXT or "열어보지" in TEXT
+
+    def test_gap_backfill_stage(self):
+        assert "--gap-plan" in TEXT
+        assert "20분 초과" in TEXT
+        assert "자막" in TEXT and "주지 않는다" in TEXT  # blind 디스패치
+
+    def test_gap_backfill_multi_batch_synthesis_input(self):
+        # Task 2 리뷰 F1(Critical): 7.5③이 합성 입력을 gap.lines만 명시하면 12장 초과
+        # 2배치 분할 시 gap2.lines가 합성에서 무통보 누락된다 — 전부 넘기라고 못 박는다.
+        assert "gap2.lines까지 전부" in TEXT

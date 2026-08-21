@@ -162,3 +162,22 @@ class TestKnowledgeFloorContract:
     # 긴 영상 밀도는 목표·하한이 있어야 나온다
     def test_long_video_has_floor_target(self):
         assert "분당 1.5건 이상을 목표" in SYNTHESIZE
+
+
+class TestBlindTranscribeContract:
+    # 실측(2026-08-19): 자막 문맥이 날조의 재료 — CORS 화면에서 main.py 20줄을 지어냄
+    def test_blind_mode_no_transcript(self):
+        assert "자막 경로가 주어지지 않으면" in TRANSCRIBE
+        assert "찾지 마라" in TRANSCRIBE
+
+
+class TestGapBackfillReviewFixes:
+    # Task 2 리뷰 F2(Important): 절차 1 "자막 파일을 Read한다"가 무조건문이면 blind
+    # 모드에서도 haiku가 자막을 능동 검색할 소지가 있다 — 조건절로 명시해야 한다.
+    def test_transcript_read_conditional_on_path_given(self):
+        assert "경로가 주어진 경우만" in TRANSCRIBE
+
+    # Task 2 리뷰 F1(Critical): 합성 입력이 gap.lines 하나로 고정되면 12장 초과 분할 시
+    # 2번째 배치(gap2.lines)가 무통보 누락된다 — synthesize.md는 gap*.lines 전부를 받아야 한다.
+    def test_synthesize_accepts_all_gap_batches(self):
+        assert "gap*.lines 전부" in SYNTHESIZE

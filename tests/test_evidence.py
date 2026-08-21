@@ -1222,3 +1222,268 @@ def test_render_cli_falls_back_to_flat_on_malformed_info_json(tmp_path):
     assert "NOTE" in p.stderr
     out = (tmp_path / "video.md").read_text(encoding="utf-8")
     assert "## 핵심 지식" in out and "### [" not in out
+
+
+def _frames_ev(ts, duration):
+    """프레임 t 리스트 + 영상 길이로 evidence 골격을 만든다.
+
+    gap_zoom_plan(Task 6)은 더 이상 ev["gaps"]를 입력으로 읽지 않는다 — 공백은
+    provenance.frames(map+zoom) 타임스탬프에서 결정론으로 계산된다(_frame_gap_source).
+    기존 테스트들은 gaps 딕셔너리를 직접 넣었지만, 이제는 그 gaps 딕셔너리와 동치인
+    공백을 만드는 프레임 배치로 재현해야 한다."""
+    return {
+        "video": {"duration": duration},
+        "provenance": {"frames": {"map": [{"t": t} for t in ts], "zoom": []}},
+    }
+
+
+def _pad_past_gate(ts, duration):
+    """최종 리뷰 F1(20분 게이트) 도입 이후 보조 헬퍼.
+
+    아래 TestGapZoomPlan/TestGapZoomPlanActivity의 산술 테스트는 전부
+    GAP_BACKFILL_MIN_DURATION(1200초=20분) 미만의 duration을 쓴다 — 게이트가 없던
+    시절에는 문제없었지만, 이제는 전부 빈 리스트로 막혀버린다. 테스트가 검증하려는
+    공백 구조(위치·크기)는 그대로 두고, ts의 마지막 지점 뒤에 80초 간격(임계
+    GAP_BACKFILL_THRESHOLD=90초 미만이라 새 공백을 만들지 않는다) 프레임을 게이트
+    초과까지 이어붙여 총 길이만 20분을 넘긴다."""
+    ts = list(ts)
+    if not ts or duration > max(ts):
+        ts.append(duration)  # 원래 경계(마지막 프레임 또는 duration)를 프레임으로 고정
+    boundary = max(ts)
+    tail = []
+    t = boundary
+    while t <= evidence.GAP_BACKFILL_MIN_DURATION:
+        t += 80.0
+        tail.append(t)
+    new_duration = tail[-1] if tail else duration
+    return ts + tail, new_duration
+
+
+def _frames_ev_long(ts, duration):
+    """_frames_ev + _pad_past_gate — 20분 게이트를 통과하면서 원래 공백 구조는 보존한다."""
+    all_ts, new_duration = _pad_past_gate(ts, duration)
+    return _frames_ev(all_ts, new_duration)
+
+
+class TestGapZoomPlan:
+    def test_short_gap_one_midpoint(self):
+        # 프레임 t=60·t=160 + duration=160 → 공백 60~160(100초) → 중점 1개 = 01:50
+        # (20분 게이트를 통과시키려 160 뒤에 조밀한 꼬리를 붙인다 — _frames_ev_long)
+        specs = evidence.gap_zoom_plan(_frames_ev_long([60.0, 160.0], 160.0))
+        assert specs == ["01:50@1024"]
+
+    def test_long_gap_two_points(self):
+        # 프레임 없음 + duration=300 → 공백 0~300(300초) → 1/3·2/3 = 01:40, 03:20
+        specs = evidence.gap_zoom_plan(_frames_ev_long([], 300.0))
+        assert specs == ["01:40@1024", "03:20@1024"]
+
+    def test_cap_prefers_long_gaps(self):
+        # 조밀 버퍼(10초, 임계 90 이하라 공백 아님)와 공백(91~110초, 임계 90 초과)을
+        # 번갈아 배치해 20개 공백을 만든다 → 상한 16으로 잘리되 긴 공백부터
+        # (Task 7: 임계 60→90 상향으로 구간 크기를 70~89초에서 91~110초로 조정 —
+        # 옛 70~89초는 새 임계(>90)에서 전부 공백 판정을 받지 못해 테스트가 깨진다)
+        # 20개 구간 누적 길이가 이미 20분을 훌쩍 넘어 _pad_past_gate의 꼬리는
+        # 붙지 않는다(20분 게이트는 자동으로 통과) — max_frames만 명시적으로 오버라이드해
+        # 상한 16 자체는 여전히 선택 가능함을 확인한다(F2: 기본값은 12로 내려갔다).
+        ts, cur = [], 0.0
+        for i in range(20):
+            cur += 10.0
+            ts.append(cur)
+            cur += 91.0 + i
+            ts.append(cur)
+        specs = evidence.gap_zoom_plan(_frames_ev_long(ts, cur), max_frames=16)
+        assert len(specs) == 16
+
+    def test_default_cap_is_twelve(self):
+        """F2: max_frames 기본값이 16→12로 내려갔다 — 20개 공백이 있어도 인자 없이
+        호출하면 12개로 잘린다(이전 리뷰의 "16→11" 주장은 오염된 캐시 기준이었고,
+        실제 레버는 임계가 아니라 이 상한이라는 정정의 회귀 가드)."""
+        ts, cur = [], 0.0
+        for i in range(20):
+            cur += 10.0
+            ts.append(cur)
+            cur += 91.0 + i
+            ts.append(cur)
+        specs = evidence.gap_zoom_plan(_frames_ev_long(ts, cur))
+        assert len(specs) == 12
+
+    def test_no_gaps_empty(self):
+        # 신규 ②: 프레임이 조밀(전 간격 30초 ≤ 임계 90초)하면 공백이 없다
+        specs = evidence.gap_zoom_plan(_frames_ev_long([30.0, 60.0, 90.0], 120.0))
+        assert specs == []
+
+    def test_boundary_gap_exactly_threshold_is_not_a_gap(self):
+        # Task 7: 정확히 GAP_BACKFILL_THRESHOLD(90)초 간격은 공백이 아니다 — 비교가
+        # 엄격 부등호(>)라 경계값 자체는 포함되지 않는다.
+        ev = _frames_ev_long([90.0], 90.0)
+        assert evidence._frame_gap_source(ev) == []
+        assert evidence.gap_zoom_plan(ev) == []
+
+    def test_boundary_gap_just_over_threshold_is_a_gap(self):
+        # Task 7: 임계+1초(91초) 간격은 공백이다.
+        ev = _frames_ev_long([91.0], 91.0)
+        assert evidence._frame_gap_source(ev) == [{"start": 0.0, "end": 91.0}]
+        assert evidence.gap_zoom_plan(ev) == ["00:45@1024"]
+
+    def test_triggers_even_when_llm_gaps_empty(self):
+        # 신규 ①(회귀 가드): LLM이 gaps를 0건 기록했어도(evidence.py의 이번 결함이 정확히
+        # 이 상황) 프레임이 성기면 공백이 여전히 결정론적으로 계산된다.
+        ev = _frames_ev_long([60.0, 160.0], 160.0)
+        ev["gaps"] = []
+        assert evidence.gap_zoom_plan(ev) == ["01:50@1024"]
+
+    def test_duration_reversal_uses_frame_boundary_not_duration(self):
+        """리뷰 F2 회귀 가드: video.duration이 마지막 프레임 t보다 작게 기록된 역전
+        입력에서도 pts를 내림차순으로 끝내지 않는다 — duration은 마지막 프레임 t보다
+        클 때만 끝점으로 붙는다. 여기서는 duration을 아예 버리고 프레임 경계(300)가
+        끝점이 되어 공백 (60, 300) 하나만 나온다.
+
+        (20분 게이트도 함께 통과시켜야 해서 원본 수치 60/300/160을 그대로 쓰지
+        못한다 — duration을 1201로, 그리고 진짜 최댓값 프레임을 300 뒤에 조밀한
+        꼬리로 1201보다 더 뒤까지 이어붙여 "duration(1201) < 실제 마지막 프레임"
+        역전 관계를 유지한 채로 총 길이만 20분을 넘긴다. (60, 300) 공백 자체는
+        건드리지 않는다.)"""
+        # 300 뒤에 80초 간격(임계 90 미만이라 새 공백을 만들지 않는다) 꼬리를 이어붙여
+        # 실제 마지막 프레임을 1201보다 뒤로 밀어낸다 — duration(1201)이 여전히
+        # "마지막 프레임보다 작게 기록된 역전값"이 되도록. _pad_past_gate는 duration을
+        # 먼저 프레임으로 꽂아버려(경계=1201) 300~1201 사이에 빈 꼬리를 남기므로 여기서는
+        # 쓸 수 없다 — 300에서 직접 조밀한 꼬리를 만든다.
+        tail, t = [], 300.0
+        while t <= 1201.0:
+            t += 80.0
+            tail.append(t)
+        ev = _frames_ev([60.0, 300.0] + tail, 1201.0)
+        assert evidence._frame_gap_source(ev) == [{"start": 60.0, "end": 300.0}]
+        # 240초 공백(≥180) → 1/3·2/3 지점 = 140(02:20), 220(03:40).
+        # 요지: duration(1201) 근접 지점이 아니라 프레임 경계(300) 기준으로 계산되고,
+        # 출력의 모든 지점이 실제 공백 (60, 300) 이내다.
+        specs = evidence.gap_zoom_plan(ev)
+        assert specs == ["02:20@1024", "03:40@1024"]
+        for spec in specs:
+            mm, ss = spec.split("@")[0].split(":")
+            assert int(mm) * 60 + int(ss) <= 300.0
+
+    def test_non_dict_frame_elements_are_skipped(self):
+        """F3(사전 미선언 append-only 위반 복구): aa04656에서 공백 산출원이
+        ev["gaps"]에서 provenance.frames로 교체되며, 옛 test_non_dict_gap_skipped
+        (비dict 원소가 섞여도 크래시 없이 스킵)가 무테스트로 방치됐다. 프레임 기반
+        입력에 맞춘 등가 테스트로 복원한다 — map/zoom 리스트에 비dict 원소나 t가
+        비수치인 dict 원소가 섞여도 크래시 없이 스킵하고, 유효 프레임만으로 공백을
+        계산한다."""
+        ev = {
+            "video": {"duration": 1300.0},
+            "provenance": {"frames": {
+                "map": [
+                    "산문 노트",             # 비dict 원소
+                    123,                      # 비dict 원소
+                    {"t": 60.0},
+                    {"t": "모름"},            # t가 비수치
+                    {"no_t_key": True},       # t 키 없음
+                    {"t": 1300.0},
+                ],
+                "zoom": [None, ["also", "not", "a", "dict"]],  # 비dict 원소
+            }},
+        }
+        # 유효 프레임은 t=60.0·1300.0뿐 → 공백 60~1300(1240초, 20분 게이트도 통과)
+        assert evidence._frame_gap_source(ev) == [{"start": 60.0, "end": 1300.0}]
+        assert evidence.gap_zoom_plan(ev) != []
+
+    def test_short_video_gate_blocks_backfill_regardless_of_gap_size(self):
+        """F1: SKILL.md 7.5절 산문("영상 20분 초과 시에만")만으로는 신뢰할 수 없다 —
+        최종 리뷰 실측에서 11분급(687초) 영상 형상도 --gap-plan이 1~4개 지점을
+        출력했다. duration<=GAP_BACKFILL_MIN_DURATION(1200초=20분)이면 공백이
+        아무리 커도(여기서는 프레임이 하나도 없어 공백이 영상 전체 687초) 코드가
+        무조건 빈 리스트를 반환한다."""
+        ev = _frames_ev([], 687.0)
+        assert evidence._frame_gap_source(ev) == []
+        assert evidence.gap_zoom_plan(ev) == []
+
+    def test_just_over_twenty_minutes_passes_gate(self):
+        """duration이 게이트(1200초)를 1초라도 넘기면(1201초) 정상적으로 공백을
+        산출한다 — 게이트 경계값 자체 회귀 가드."""
+        ev = _frames_ev([], 1201.0)
+        specs = evidence.gap_zoom_plan(ev)
+        assert specs != []
+
+    def test_non_numeric_duration_returns_empty_list(self):
+        """F1: duration이 비수치(손상된 메타데이터)면 20분 게이트를 판정할 수 없다 —
+        float() 변환 실패를 크래시로 흘리지 않고 빈 리스트로 안전하게 처리한다
+        (비용 불변 원칙: 판정 불가 시 기본값은 "보강 없음")."""
+        ev = _frames_ev([60.0, 5000.0], "알수없음")
+        assert evidence._frame_gap_source(ev) == []
+        assert evidence.gap_zoom_plan(ev) == []
+
+
+class TestGapZoomPlanActivity:
+    def _curve(self, length, peaks):
+        c = [0.0] * length
+        for sec, val in peaks.items():
+            c[sec] = val
+        return c
+
+    def test_peak_beats_midpoint(self):
+        # 프레임 t=60·t=160 + duration=160 → 공백 60~160, 피크 @150(값 90) → 02:30
+        ev = _frames_ev_long([60.0, 160.0], 160.0)
+        curve = self._curve(200, {150: 90.0, 110: 10.0})
+        assert evidence.gap_zoom_plan(ev, activity_curve=curve) == ["02:30@1024"]
+
+    def test_long_gap_two_peaks_with_separation(self):
+        # 프레임 없음 + duration=300 → 공백 0~300, 피크 @100(90)·@110(80)·@250(70)
+        # → 110은 100과 45초 미만이라 250 선택
+        ev = _frames_ev_long([], 300.0)
+        curve = self._curve(400, {100: 90.0, 110: 80.0, 250: 70.0})
+        specs = evidence.gap_zoom_plan(ev, activity_curve=curve)
+        assert sorted(specs) == ["01:40@1024", "04:10@1024"]
+
+    def test_zero_curve_falls_back_to_midpoint(self):
+        ev = _frames_ev_long([60.0, 160.0], 160.0)
+        assert evidence.gap_zoom_plan(ev, activity_curve=[0.0] * 200) == ["01:50@1024"]
+
+    def test_none_curve_keeps_legacy(self):
+        ev = _frames_ev_long([], 300.0)
+        assert evidence.gap_zoom_plan(ev, activity_curve=None) == ["01:40@1024", "03:20@1024"]
+
+    def test_margin_excludes_gap_edges(self):
+        # 경계 3초 이내 피크는 제외 — 공백 60~160, 피크 @61(99)은 무시하고 @120(50) 선택
+        ev = _frames_ev_long([60.0, 160.0], 160.0)
+        curve = self._curve(200, {61: 99.0, 120: 50.0})
+        assert evidence.gap_zoom_plan(ev, activity_curve=curve) == ["02:00@1024"]
+
+    def test_fractional_gap_margin_uses_ceil_floor(self):
+        """리뷰 F1: 공백 경계가 소수초(100.5~200.5)면 int(s)+3은 실제 여유가 3초 미만인
+        지점을 통과시킨다. @103(99)은 시작에서 2.5초(103-100.5)뿐이라 마진 미달로
+        제외되어야 하고, @150(50)이 선택돼야 한다.
+        버퍼 프레임 t=60.0을 추가로 넣어 0~100.5 구간이(0~60.0, 60.0~100.5 모두 ≤60초)
+        별도 공백으로 잡히지 않게 하고, 목표 공백은 100.5~200.5 하나만 남긴다."""
+        ev = _frames_ev_long([60.0, 100.5, 200.5], 200.5)
+        curve = self._curve(250, {103: 99.0, 150: 50.0})
+        assert evidence.gap_zoom_plan(ev, activity_curve=curve) == ["02:30@1024"]
+
+
+def test_gap_plan_falls_back_on_encoding_corrupt_signals_json(tmp_path):
+    """리뷰 F2: signals.json이 UTF-8로 디코드 불가능(UnicodeDecodeError)해도 크래시
+    없이 레거시 중점/삼분점 폴백으로 조용히 진행한다 — exit 0, stderr 비어 있음."""
+    evidence.save(tmp_path, _frames_ev_long([60.0, 160.0], 160.0))
+    (tmp_path / "signals.json").write_bytes(b"\xff\xfe\x00\x01broken-not-utf8")
+    p = _run([str(tmp_path), "--gap-plan"])
+    assert p.returncode == 0
+    assert p.stderr == ""
+    assert p.stdout.strip() == "01:50@1024"
+
+
+def test_gap_plan_alone_is_fail_soft_when_evidence_missing(tmp_path):
+    """--gap-plan만 단독 요청됐을 때 evidence.json 부재는 fail-soft(NOTE + exit 0)로
+    처리한다 — 보강은 선택 단계라 파이프라인을 끊지 않는다."""
+    p = _run([str(tmp_path), "--gap-plan"])
+    assert p.returncode == 0
+    assert "NOTE" in p.stderr
+
+
+def test_gap_plan_with_other_action_hits_hard_gate_when_evidence_missing(tmp_path):
+    """--gap-plan이 --render 등 다른 액션과 한 호출에 섞이면 evidence.json 부재를
+    조용히 넘기지 않는다 — 그렇지 않으면 --render가 통보 없이 스킵된 채 exit 0으로
+    끝나 파이프라인이 성공으로 오판하는 조용한 실패가 된다. 이 경우는 기존
+    하드게이트(evidence.json 부재 시 비정상 종료)와 동일하게 흘러가야 한다."""
+    p = _run([str(tmp_path), "--gap-plan", "--render"])
+    assert p.returncode == 2
+    assert "ERROR" in p.stderr
