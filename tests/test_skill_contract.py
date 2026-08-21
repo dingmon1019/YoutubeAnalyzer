@@ -187,11 +187,15 @@ class TestGateFailureRetryContract:
 
 
 class TestDensityCureContract:
-    # 치유 라운드(density-cure, 2026-08-21): 본게이트 실측 — haiku 동일 조건 재시도는
-    # 지도 만성 빈약을 못 살린다(9V→8V, K 29). 재시도는 sonnet 승격으로 고정한다.
-    # 승격은 재시도 한정 — 1차 전사가 sonnet이 되면 run6 실측($3.61)의 비용 역전이 재발한다.
-    def test_retry_escalates_to_sonnet_twice(self):
-        assert TEXT.count('`model: "sonnet"`으로 승격해 1회만 재시도') == 2
+    # 치유 라운드(density-cure, 2026-08-21) 2차 재정: 승격 실측($3.21)에서 지도·확대
+    # **둘 다** haiku 1차가 빈약(9V/9장·7V/4장)이라 sonnet 재시도가 두 번 다 발동 —
+    # haiku 1차 시도가 순수 이중 지불(디스패치 4회+왕복 2회)이었다. 사용자 재정으로
+    # 비전 1차를 sonnet 직행으로 전환한다. run6($3.61)의 비용 역전 우려는 선별
+    # 등재(v0.13.0)가 하류 곱수를 끊어 완화됐다는 판단 — 이 게이트 실측이 검증한다.
+    # 감지·1회 재시도(fail-soft)는 sonnet도 빈약할 수 있어 안전망으로 유지한다.
+    def test_vision_passes_are_sonnet(self):
+        assert '비전① (Agent, `model: "sonnet"`)' in TEXT
+        assert "비전② (sonnet)" in TEXT
 
-    def test_first_pass_stays_haiku(self):
-        assert '비전① (Agent, `model: "haiku"`)' in TEXT
+    def test_retry_safety_net_stays_twice(self):
+        assert TEXT.count("1회만 재시도") == 2
