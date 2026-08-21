@@ -186,3 +186,11 @@ class TestGapBackfillReviewFixes:
     # 2번째 배치(gap2.lines)가 무통보 누락된다 — synthesize.md는 gap*.lines 전부를 받아야 한다.
     def test_synthesize_accepts_all_gap_batches(self):
         assert "gap*.lines 전부" in SYNTHESIZE
+
+
+class TestStepGranularityContract:
+    # 실측(2026-08-21, kYP 본게이트): "쪼개지 마라"가 따라하기 절차의 단계 병합으로
+    # 과잉 작동 — VidIQ 연결 4단계가 뭉개져 유지율 71%. 재현 가능성 우선 명시.
+    def test_steps_are_not_merged(self):
+        assert "단계는 합치지 마라" in SYNTHESIZE
+        assert "재현 가능성이 우선" in SYNTHESIZE
