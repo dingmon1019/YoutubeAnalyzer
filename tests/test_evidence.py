@@ -1487,3 +1487,282 @@ def test_gap_plan_with_other_action_hits_hard_gate_when_evidence_missing(tmp_pat
     p = _run([str(tmp_path), "--gap-plan", "--render"])
     assert p.returncode == 2
     assert "ERROR" in p.stderr
+
+
+# ── 관용 검증 이식 (dense 브랜치 8346d04·8678bbd 이식, F-헤더·복수파일은 범위 밖) ──
+#
+# 사용자 정책 재정 인용(dense 브랜치): "완전성 > 문자 정밀도 — 약간의 오타는 허용,
+# 전량거부·재시도 루프가 비용의 주범." 낱줄 하나의 형식 오류가 배치 전체를 죽이면
+# 안 된다. K·C(실제 지식을 나르는 항목)만 20% 드롭율 게이트를 두고, V/T/G는 항상
+# 관용한다(드롭 카운트만 남긴다). F-헤더·복수 파일 연접은 dense 전용이라 이번
+# 이식 범위 밖이다 — 기존 단일 파일 --from-lines 호출·6필드 V 포맷은 무변경이
+# 계약이다.
+
+def test_expand_lines_drops_malformed_v_and_counts():
+    text = ("V\tui\t1.0\tf1.jpg\thigh\t좋은값\n"
+            "V\tui\t2.0\tf2.jpg\thigh\n"       # value 필드 누락(5필드) -> 드롭
+            "V\tui\t3.0\tf3.jpg\tmedium\t다른좋은값\n")
+    p = evidence.expand_lines(text)
+    assert len(p["visual_evidence"]) == 2
+    assert p["_line_stats"]["attempted"]["V"] == 3
+    assert p["_line_stats"]["dropped"]["V"] == 1
+
+
+def test_expand_lines_vn_position_preserved_when_middle_v_is_dropped():
+    """드롭된 V도 vn을 소모해야 한다 — 하류 K/C의 로컬 v# 참조는 위치 기준이라,
+    드롭이 번호를 밀면 드롭과 무관한 뒤쪽 V들의 id가 전부 어긋난다."""
+    text = ("V\tui\t1.0\tf1.jpg\thigh\t첫값\n"      # v1
+            "V\tui\t2.0\tf2.jpg\thigh\n"            # 필드 부족 -> 드롭(그래도 vn 소모)
+            "V\tui\t3.0\tf3.jpg\thigh\t셋째값\n"    # v3이어야 한다(v2가 아니라)
+            "K\tconcept\t3.0\tv3\t셋째값 참조\n")
+    p = evidence.expand_lines(text)
+    assert [v["id"] for v in p["visual_evidence"]] == ["v1", "v3"]
+    assert p["knowledge_items"][0]["evidence"] == [{"source": "frame", "ref": "v3"}]
+    assert p["_line_stats"]["dropped"]["V"] == 1
+
+
+def test_expand_lines_drops_malformed_k_and_counts():
+    text = ("K\tcommand\t1.0\tv1\t좋은 명령\n"
+            "K\tcommand\t2.0\t\n"        # content 필드 없음 -> 드롭
+            "K\tcommand\t3.0\tv1\t또 좋은 명령\n")
+    p = evidence.expand_lines(text)
+    assert len(p["knowledge_items"]) == 2
+    assert p["_line_stats"]["attempted"]["K"] == 3
+    assert p["_line_stats"]["dropped"]["K"] == 1
+
+
+def test_expand_lines_unknown_record_kind_still_fails_loud():
+    """관용 드롭은 T/V/K/C/G 안의 낱줄 형식 오류에만 적용된다 — 완전히 다른 레코드
+    종류는 여전히 즉시 거부한다(기존 test_expand_lines_rejects_unknown_record와
+    동일 계약, 관용 드롭 도입 후에도 유지되는지 별도 고정)."""
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match=r"1행"):
+        evidence.expand_lines("Q\t알수없음\n")
+
+
+def test_expand_lines_well_formed_batch_has_zero_drops_in_stats():
+    """기존 정상 배치(_LINES)는 드롭 0건으로 집계돼야 한다 — 하위호환 회귀 가드."""
+    p = evidence.expand_lines(_LINES)
+    assert p["_line_stats"]["dropped"] == {"T": 0, "V": 0, "K": 0, "C": 0, "G": 0}
+    assert p["_line_stats"]["attempted"] == {"T": 1, "V": 1, "K": 1, "C": 1, "G": 1}
+
+
+# ── CLI: 관용 드롭 + K/C 20% 게이트 ─────────────────────────────────────────
+
+def test_cli_from_lines_lenient_batch_with_v_typos_exits_zero_with_dropped_count(tmp_path):
+    """핵심 계약: V 오타 3줄이 섞여도 전량거부(exit 2)하지 않고 나머지를 병합한 뒤
+    exit 0 + stdout `DROPPED 3`을 보고한다."""
+    n_frames = 100
+    frame_names = [f"frame{i:03d}.jpg" for i in range(n_frames)]
+    ev = evidence.register_frames(_skel(), frame_names)
+    evidence.save(tmp_path, ev)
+
+    typo_frames = {10, 50, 90}
+    lines = []
+    for i, name in enumerate(frame_names):
+        if i in typo_frames:
+            lines.append(f"V\tui\t{float(i)}\t{name}\thigh\n")  # value 필드 누락 -> 드롭
+        else:
+            lines.append(f"V\tui\t{float(i)}\t{name}\thigh\tvalue-{i}\n")
+    text = "".join(lines)
+
+    patch_file = tmp_path / "patch.lines"
+    patch_file.write_text(text, encoding="utf-8")
+
+    p = _run([str(tmp_path), "--from-lines", str(patch_file)])
+    assert p.returncode == 0, f"stdout={p.stdout}\nstderr={p.stderr}"
+    assert "DROPPED 3" in p.stdout
+
+    merged = evidence.load(tmp_path)
+    assert len(merged["visual_evidence"]) == n_frames - 3
+
+
+def test_cli_from_lines_dropped_count_matches_actual_drops(tmp_path):
+    """stdout의 DROPPED n이 실제 드롭 수와 정확히 일치하는지 작은 배치로 별도 고정."""
+    ev = evidence.register_frames(_skel(), ["ok.jpg"])
+    evidence.save(tmp_path, ev)
+    text = (
+        "V\tui\t1.0\tok.jpg\thigh\t정상값1\n"
+        "V\tui\t2.0\tok.jpg\thigh\n"        # 5필드 -> 드롭 1
+        "V\tui\t3.0\tok.jpg\n"              # 4필드 -> 드롭 2
+        "V\tui\t4.0\tok.jpg\thigh\t정상값2\n"
+        "V\ta\tb\tc\td\te\n"                # timestamp 비수치 -> 드롭 3
+    )
+    patch_file = tmp_path / "patch.lines"
+    patch_file.write_text(text, encoding="utf-8")
+
+    p = _run([str(tmp_path), "--from-lines", str(patch_file)])
+    assert p.returncode == 0, f"stdout={p.stdout}\nstderr={p.stderr}"
+    assert "DROPPED 3" in p.stdout
+
+    merged = evidence.load(tmp_path)
+    assert len(merged["visual_evidence"]) == 2
+
+
+def test_cli_from_lines_k_drop_rate_over_20_percent_rejects_whole_batch(tmp_path):
+    """K 드롭율이 20%를 넘으면(여기서는 30%) 관용하지 않는다 — 산발적 오타가 아니라
+    파일 전체가 잘못된 규약이라는 신호이므로 기존처럼 배치 전체를 거부한다."""
+    evidence.save(tmp_path, _skel())
+    n_k, n_bad = 20, 6  # 30%
+    lines = []
+    for i in range(n_k):
+        if i < n_bad:
+            lines.append(f"K\tcommand\t{float(i)}\t")  # refs·content 누락 -> 드롭
+        else:
+            lines.append(f"K\tcommand\t{float(i)}\tt0\t명령 {i}")
+    patch_file = tmp_path / "patch.lines"
+    patch_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    p = _run([str(tmp_path), "--from-lines", str(patch_file)])
+    assert p.returncode == 2, f"stdout={p.stdout}\nstderr={p.stderr}"
+    assert "INVALID" in p.stderr
+    assert "knowledge_items" in p.stderr
+    assert evidence.load(tmp_path)["knowledge_items"] == []
+
+
+def test_cli_from_lines_c_drop_rate_over_20_percent_rejects_whole_batch(tmp_path):
+    """K와 대칭 계약 — C도 같은 20% 게이트를 공유한다."""
+    evidence.save(tmp_path, _skel())
+    n_c, n_bad = 10, 4  # 40%
+    lines = []
+    for i in range(n_c):
+        if i < n_bad:
+            lines.append(f"C\t{float(i)}\t")  # refs·claim 누락 -> 드롭
+        else:
+            lines.append(f"C\t{float(i)}\tt0\t주장 {i}")
+    patch_file = tmp_path / "patch.lines"
+    patch_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    p = _run([str(tmp_path), "--from-lines", str(patch_file)])
+    assert p.returncode == 2, f"stdout={p.stdout}\nstderr={p.stderr}"
+    assert "INVALID" in p.stderr
+    assert "claims" in p.stderr
+    assert evidence.load(tmp_path)["claims"] == []
+
+
+def test_cli_from_lines_kc_drop_rate_at_or_below_20_percent_still_merges(tmp_path):
+    """20% 경계값 자체는 게이트를 넘지 않는다(엄격 부등호 `>`) — 정확히 20%는 관용."""
+    evidence.save(tmp_path, _skel())
+    n_k, n_bad = 10, 2  # 정확히 20%
+    lines = []
+    for i in range(n_k):
+        if i < n_bad:
+            lines.append(f"K\tcommand\t{float(i)}\t")
+        else:
+            lines.append(f"K\tcommand\t{float(i)}\tt0\t명령 {i}")
+    patch_file = tmp_path / "patch.lines"
+    patch_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    p = _run([str(tmp_path), "--from-lines", str(patch_file)])
+    assert p.returncode == 0, f"stdout={p.stdout}\nstderr={p.stderr}"
+    assert "DROPPED 2" in p.stdout
+    assert len(evidence.load(tmp_path)["knowledge_items"]) == 8
+
+
+def test_cli_dropped_v_referenced_by_k_causes_validate_rejection(tmp_path):
+    """드롭된 V(2번째, v2 자리)를 K가 참조하면 그 v-id는 실재하지 않으므로
+    validate()가 exit 2로 배치 전체를 거부한다 — 위치 오배선이 아니라 의도된
+    fail-loud(드롭 = 그 id가 아예 존재하지 않게 되는 것)."""
+    ev = evidence.register_frames(_skel(), ["f1.jpg", "f3.jpg"])
+    evidence.save(tmp_path, ev)
+    text = (
+        "V\tui\t1.0\tf1.jpg\thigh\t첫값\n"      # v1
+        "V\tui\t2.0\tf2.jpg\thigh\n"            # 필드 부족 -> 드롭(v2 자리)
+        "V\tui\t3.0\tf3.jpg\thigh\t셋째값\n"    # v3
+        "K\tconcept\t3.0\tv2\t드롭된 값 참조\n"  # 존재하지 않는 v2 참조
+    )
+    patch_file = tmp_path / "patch.lines"
+    patch_file.write_text(text, encoding="utf-8")
+
+    p = _run([str(tmp_path), "--from-lines", str(patch_file)])
+    assert p.returncode == 2, f"stdout={p.stdout}\nstderr={p.stderr}"
+    assert "v2" in p.stderr
+    assert "visual_evidence" in p.stderr
+    assert evidence.load(tmp_path)["knowledge_items"] == []
+
+
+def test_cli_surviving_v_ids_referenced_by_k_merges_successfully(tmp_path):
+    """같은 드롭 구조에서 살아남은 v1·v3만 참조하면(드롭된 v2는 참조하지 않음)
+    위치 보존이 정확해 exit 0으로 정상 병합된다."""
+    ev = evidence.register_frames(_skel(), ["f1.jpg", "f3.jpg"])
+    evidence.save(tmp_path, ev)
+    text = (
+        "V\tui\t1.0\tf1.jpg\thigh\t첫값\n"      # v1
+        "V\tui\t2.0\tf2.jpg\thigh\n"            # 필드 부족 -> 드롭(v2 자리)
+        "V\tui\t3.0\tf3.jpg\thigh\t셋째값\n"    # v3
+        "K\tconcept\t1.0\tv1\t첫값 참조\n"
+        "K\tconcept\t3.0\tv3\t셋째값 참조\n"
+    )
+    patch_file = tmp_path / "patch.lines"
+    patch_file.write_text(text, encoding="utf-8")
+
+    p = _run([str(tmp_path), "--from-lines", str(patch_file)])
+    assert p.returncode == 0, f"stdout={p.stdout}\nstderr={p.stderr}"
+    assert "DROPPED 1" in p.stdout
+
+    merged = evidence.load(tmp_path)
+    assert {v["id"] for v in merged["visual_evidence"]} == {"v1", "v3"}
+    refs = {k["content"]: k["evidence"][0]["ref"] for k in merged["knowledge_items"]}
+    assert refs == {"첫값 참조": "v1", "셋째값 참조": "v3"}
+
+
+def test_cli_from_lines_single_file_still_backward_compatible(tmp_path):
+    """관용 드롭·20% 게이트 도입 이후에도 기존 단일 파일 --from-lines 호출은
+    완전히 하위 호환이다 — 기존 T/V/K/C/G 전량 fixture(_LINES)가 그대로 병합된다."""
+    tr = {"source": "captions", "lang": "ko", "dupes_removed": 0, "flags": [],
+          "segments": [{"start": float(i), "text": f"s{i}"} for i in range(20)]}
+    ev = evidence.build_skeleton(_info(), _sig(), tr, [], "u")
+    ev = evidence.register_frames(ev, ["t0212_1024.jpg"])
+    evidence.save(tmp_path, ev)
+    lines = tmp_path / "patch.lines"
+    lines.write_text(_LINES, encoding="utf-8")
+
+    p = _run([str(tmp_path), "--from-lines", str(lines)])
+    assert p.returncode == 0, p.stderr
+
+    merged = evidence.load(tmp_path)
+    assert merged["visual_evidence"][0]["value"] == "16.3x 표시"
+    assert merged["knowledge_items"][0]["content"] == "pip install -U yt-dlp"
+
+
+# ── id_offset 수정: len() 기반 -> 기존 v-id 최대 숫자 기반 (스케일 프리모템 ③) ──
+
+def test_cli_from_lines_id_offset_survives_drop_created_gap(tmp_path):
+    """관용 드롭이 v-id 결번(v1·v3 생존, v2 드롭)을 만든 뒤 후속 --from-lines
+    배치가 새 V를 추가하는 상황 — len(visual_evidence)(=2) 기반 오프셋은 새 id를
+    v3으로 매겨 기존 v3과 충돌한다(수정 전 버그). 최대 숫자 기반 오프셋(=3)은
+    v4로 매겨 충돌 없이 병합돼야 한다."""
+    ev = evidence.register_frames(_skel(), ["f1.jpg", "f3.jpg", "f4.jpg"])
+    evidence.save(tmp_path, ev)
+
+    first_batch = (
+        "V\tui\t1.0\tf1.jpg\thigh\t첫값\n"      # v1
+        "V\tui\t2.0\tf2.jpg\thigh\n"            # 필드 부족 -> 드롭(v2 자리, 결번)
+        "V\tui\t3.0\tf3.jpg\thigh\t셋째값\n"    # v3
+    )
+    first_file = tmp_path / "first.lines"
+    first_file.write_text(first_batch, encoding="utf-8")
+    p1 = _run([str(tmp_path), "--from-lines", str(first_file)])
+    assert p1.returncode == 0, f"stdout={p1.stdout}\nstderr={p1.stderr}"
+    after_first = evidence.load(tmp_path)
+    assert {v["id"] for v in after_first["visual_evidence"]} == {"v1", "v3"}
+
+    second_batch = "V\tui\t4.0\tf4.jpg\thigh\t넷째값\n"
+    second_file = tmp_path / "second.lines"
+    second_file.write_text(second_batch, encoding="utf-8")
+    p2 = _run([str(tmp_path), "--from-lines", str(second_file)])
+    assert p2.returncode == 0, f"stdout={p2.stdout}\nstderr={p2.stderr}"
+
+    merged = evidence.load(tmp_path)
+    ids = [v["id"] for v in merged["visual_evidence"]]
+    assert ids == ["v1", "v3", "v4"], ids  # v3 재사용(충돌) 없이 v4로 이어져야 한다
+    assert len(set(ids)) == len(ids), "중복 id 없어야 한다"
+    assert evidence.validate(merged) == []
+
+
+def test_expand_lines_id_offset_param_is_max_id_not_count():
+    """단위 수준 회귀 가드: id_offset 파라미터에 "결번 있는 최대 숫자"(예: 3, 항목은
+    2개뿐)를 넘기면 새 V는 v4부터 시작해야 한다 — len() 기반 오프셋(2)이었다면
+    v3이 되어 기존 v3과 충돌했을 것이다."""
+    p = evidence.expand_lines("V\tui\t9.0\tf9.jpg\thigh\t새값\n", id_offset=3)
+    assert p["visual_evidence"][0]["id"] == "v4"

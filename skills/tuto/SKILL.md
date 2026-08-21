@@ -55,20 +55,17 @@ NOTE(yt-dlp 최신성·JS 런타임 부재)는 사용자에게 한 줄 알린다
 
 **5. 합성 (Agent, `model: "sonnet"`).** "`<PROMPTS>/synthesize.md`를 Read하고 수행.
 입력: pass1-report.txt, vision-map.lines, vision-zoom.lines. 출력:
-<cache_dir>/patch.lines". V 전부 복사 + K/C/G — 단일 배치가 계약이다. 최종 응답
+<cache_dir>/patch.lines". 인용 V만 복사 + K/C/G — 단일 배치가 계약이다. 최종 응답
 `T=<영상유형>, K n건, C n건, V 복사 m건, ⚠️ k건`에서 9단계 보고용 수치를 얻는다.
 
 **6. 병합 + 교차 대조.**
 `evidence.py "<cache_dir>" --from-lines "<cache_dir>/patch.lines" --cross-check` 한 호출 —
-기존 `--merge` 스키마 검증 게이트를 그대로 통과해야 한다. exit 2면 stderr의 INVALID 줄을
-합성 에이전트에 그대로 재전달해 1회 수정시킨다(파일 수정도 에이전트가 한다). CROSSCHECK
-출력은 v-id·kind·값쌍뿐 프레임명이 없다 — flag가 나오면 **비전 재확인(haiku)**:
-transcribe.md 재확인 모드로 `<cache_dir>/evidence.json` 경로와 flag의 v-id·값 후보를
-주고(프레임명은 에이전트가 evidence.json에서 직접 찾는다) `<cache_dir>/recheck.lines`에
-정정 V라인을 받아 `--from-lines`로 반영한다. flag 수를 기억한다 — 8단계 `--cross-flags`에
-넣는다(정정 반영 여부와 무관하게 발견 건수를 기록한다). **한계**: 정정은 V 추가 등재일
-뿐 기존 K/C의 오독 값은 그대로 남는다 — 갈린 값은 video.md에 flag 건수로만 드러나며
-정본 판정은 정정 V가 담당한다.
+기존 `--merge` 스키마 검증 게이트를 그대로 통과해야 한다. stdout의 `DROPPED n`은
+8단계 `--note "형식 드롭 n건"`으로 보고할 뿐 재전달 대상이 아니다(n>0일 때만). exit 2
+INVALID(스키마 검증 실패든 K/C 드롭율 20% 초과든)는 stderr 줄 그대로 합성 에이전트에
+재전달해 1회 수정시킨다(파일 수정도 에이전트가 한다). CROSSCHECK 출력은
+v-id·kind·값쌍뿐 프레임명이 없다 — flag는 **재확인 디스패치 없이** 건수만 기억해
+8단계 `--cross-flags`에 그대로 넣는다.
 
 **7. 커버리지 감사 (Agent, `model: "haiku"`).**
 `evidence.py "<cache_dir>" --coverage-input > "<cache_dir>/coverage-digest.txt"` 후
@@ -117,7 +114,9 @@ T·K·C·⚠️ 값만 쓴다) + 두 산출물 경로. 자연어 요청이 있�
 ## 후속 질문
 
 이미 분석된 영상은 `<cache_dir>/evidence.json`으로 먼저 답한다(질의 응답 단계에서는
-evidence.json Read 허용 — 이것이 캐시 재질의다). **analyze.py 재실행 금지.** 근거가
+evidence.json Read 허용 — 이것이 캐시 재질의다). **정본에 없는 관측을 물으면
+캐시의 vision-*.lines를 그때 Read한다**(인용되지 않아 evidence.json엔 없어도
+캐시엔 남아 있다). **analyze.py 재실행 금지.** 근거가
 부족할 때만 `zoom.py --timestamps`로 프레임을 만들고 비전 재확인 에이전트로 판독시켜
 `--from-lines`로 반영한다 — 이때도 이미지는 에이전트가 본다. `video.mp4 evicted` 오류면
 재분석이 필요함을 알린다.
