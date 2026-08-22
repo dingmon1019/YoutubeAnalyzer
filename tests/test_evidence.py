@@ -2441,3 +2441,37 @@ class TestScreenCheckPrecision:
         flags = evidence.screen_check(self._ev("크기를 30으로", ["25", "5", "100"]))
         assert len(flags) == 1
         assert flags[0]["screen_candidates"] == ["25"]  # 5·100은 자릿수 불일치
+
+
+class TestScreenPoolFromCache:
+    """미등재 원본 관측까지 검문 후보로 (컨트롤러 통합 검증, 2026-08-22).
+
+    선별 등재(v0.13.0) 이후 정본의 V는 인용된 것뿐이라, 지식과 어긋나는 화면
+    값일수록 등재되지 않아 검문을 통째로 빠져나간다 — 실측 게이트에서 정확히
+    그렇게 통과됐다. 원본은 캐시에 남는다는 선별 등재의 전제를 검문이 쓴다.
+    오프라인 정밀도(보존 캐시 7종·관측 풀 최대 542건·지식 436건): 오탐 0."""
+
+    def _cache(self, tmp_path, lines):
+        (tmp_path / "vision-zoom.lines").write_text(lines, encoding="utf-8")
+        return tmp_path
+
+    def test_pool_reads_v_lines(self, tmp_path):
+        self._cache(tmp_path, "V\tui\t217.0\tt0337_512.jpg\thigh\t25\n"
+                              "T\ttutorial\thigh\t헤더는 무시\n")
+        pool = evidence.screen_pool_from_cache(tmp_path)
+        assert [p["value"] for p in pool] == ["25"]
+        assert pool[0]["timestamp"] == 217.0
+        assert "t0337_512.jpg" in pool[0]["id"]  # 추적 가능한 출처
+
+    def test_unregistered_screen_value_is_caught(self, tmp_path):
+        self._cache(tmp_path, "V\tui\t217.0\tt0337_512.jpg\thigh\t25\n")
+        ev = {"visual_evidence": [],   # 인용되지 않아 정본에 없다
+              "knowledge_items": [{"id": "k1", "type": "setting", "timestamp": 216.0,
+                                   "evidence": [], "content": "크기를 30으로 축소한다"}],
+              "claims": []}
+        assert evidence.screen_check(ev) == []           # 정본만 보면 못 잡는다
+        flags = evidence.screen_check(ev, extra_pool=evidence.screen_pool_from_cache(tmp_path))
+        assert len(flags) == 1 and flags[0]["screen_candidates"] == ["25"]
+
+    def test_missing_cache_is_fail_soft(self, tmp_path):
+        assert evidence.screen_pool_from_cache(tmp_path / "없는디렉토리") == []

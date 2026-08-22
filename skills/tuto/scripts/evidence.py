@@ -1062,9 +1062,44 @@ _SCREEN_NUM_RE = re.compile(r"\d+(?:\.\d+)?")          # 본문 숫자 토큰(�
 _SCREEN_NUM_FULL_RE = re.compile(r"^\d+(?:\.\d+)?$")   # 화면 후보 — 값 전체가 숫자
 
 
-def screen_check(ev: dict, window: float = SCREEN_CHECK_WINDOW) -> list:
+def screen_pool_from_cache(cache_dir) -> list:
+    """캐시의 원본 화면 전사(vision-*.lines·gap*.lines)에서 V 관측을 전부 긁어
+    검문용 후보 풀로 만든다 — 등재 여부와 무관하다.
+
+    선별 등재(v0.13.0) 이후 정본에 남는 V는 **인용된 것뿐**이라, 지식과 어긋나는
+    화면 값일수록 등재되지 않아 검문의 사각으로 떨어진다(실측 2026-08-22: 지식은
+    자막의 30을 실었고 화면의 25는 인용되지 않아 정본에 없었다). 원본은 캐시에
+    보존된다는 선별 등재의 전제를 여기서 쓴다. 파일이 없거나 파손이면 빈 목록
+    (fail-soft — 검문이 파이프라인을 죽이면 안 된다)."""
+    pool = []
+    d = Path(cache_dir)
+    if not d.is_dir():
+        return pool
+    for f in sorted(d.glob("vision-*.lines")) + sorted(d.glob("gap*.lines")):
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for ln in text.splitlines():
+            parts = ln.split("\t")
+            if len(parts) < 6 or parts[0] != "V":
+                continue
+            try:
+                ts = float(parts[2])
+            except ValueError:
+                continue
+            pool.append({"id": f"{f.name}@{parts[3]}", "timestamp": ts,
+                         "value": parts[5].strip()})
+    return pool
+
+
+def screen_check(ev: dict, window: float = SCREEN_CHECK_WINDOW,
+                 extra_pool: list = None) -> list:
     """knowledge_items·claims 중 type이 setting|command인 항목의 본문 숫자 토큰을
-    ±window초 창의 visual_evidence 값과 대조한다.
+    ±window초 창의 화면 관측(정본 visual_evidence + `extra_pool`)과 대조한다.
+
+    `extra_pool`은 `screen_pool_from_cache()`가 만든 미등재 원본 관측이다 —
+    정본만 보면 인용되지 않은 화면 값이 검문을 통째로 빠져나간다.
 
     화면 후보는 visual_evidence.value가 **전체가 순수 숫자**(정수·소수)인 V만
     센다 — "Position 1"·"Kelly 3"처럼 라벨에 숫자가 섞인 값은 대조 대상이 아니다
@@ -1078,6 +1113,7 @@ def screen_check(ev: dict, window: float = SCREEN_CHECK_WINDOW) -> list:
     반환: [{"item_id", "text_value", "screen_candidates": [...], "v_ids": [...]}]
     본문 숫자 토큰마다 최대 1건씩 낸다(여러 개가 어긋나면 여러 건)."""
     ve_list = [v for v in ev.get("visual_evidence") or [] if isinstance(v, dict)]
+    ve_list += [v for v in (extra_pool or []) if isinstance(v, dict)]
     flags = []
     for coll, text_key in (("knowledge_items", "content"), ("claims", "claim")):
         for item in ev.get(coll) or []:
@@ -1125,14 +1161,14 @@ def screen_check(ev: dict, window: float = SCREEN_CHECK_WINDOW) -> list:
     return flags
 
 
-def apply_screen_check(ev: dict, flags: list = None) -> list:
+def apply_screen_check(ev: dict, flags: list = None, extra_pool: list = None) -> list:
     """screen_check 결과를 대상 항목에 `screen_conflict`로 표기한다.
 
     **본문 문자열은 절대 건드리지 않는다** — 조용한 변조 금지, 사람이 보게
     만드는 게 목적이다(플랜 Task A §2: "본문 자동 치환 금지"). flags를 안
     넘기면 screen_check(ev)를 새로 돌린다. 반환값은 적용된 flags 목록."""
     if flags is None:
-        flags = screen_check(ev)
+        flags = screen_check(ev, extra_pool=extra_pool)
     idx = _audit_index(ev)
     for fl in flags:
         item = idx.get(fl["item_id"])
@@ -1585,7 +1621,11 @@ def main() -> int:
             # 자동으로 걸린다 — 감사 경로만 빠지던 실패 사례의 구멍을 막는다.
             # 본문은 건드리지 않고 screen_conflict만 표기한다(candidate는 validate·
             # save 전이므로, 통과 못 하면 이 표기도 함께 버려진다 — 조용한 잔류 없음).
-            screen_flags = apply_screen_check(candidate)
+            # 후보 풀에 캐시의 **미등재 원본 관측**까지 넣는다 — 선별 등재 이후
+            # 지식과 어긋나는 화면 값일수록 인용되지 않아 정본에 없다(실측: 화면
+            # 25가 등재되지 않아 검문이 자막 30을 통과시켰다).
+            screen_flags = apply_screen_check(
+                candidate, extra_pool=screen_pool_from_cache(args.cache_dir))
         if args.merge:
             candidate = merge(candidate, json.loads(Path(args.merge).read_text(encoding="utf-8")))
         if args.verdicts:
