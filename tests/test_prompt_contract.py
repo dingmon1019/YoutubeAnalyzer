@@ -247,3 +247,25 @@ class TestKnowledgeCeilingHarmonized:
     def test_fallback_when_budget_not_given(self):
         assert "못 받았으면" in SYNTHESIZE
         assert "폴백은 천장 30건" in SYNTHESIZE
+
+
+class TestScreenGroundingContract:
+    # 근거 인용 감지 라운드(2026-08-22): pwGeWRlrU10 실측 — 화면 확대 프레임(217s)이
+    # `Size: 25`를 보여줬는데도 정본은 자막의 "30"을 그대로 실었다(V 10건 복사 +
+    # 인용 0건). `V 복사 m건`만으로는 "복사했지만 인용 안 함"을 구분 못 하므로
+    # `V 인용 j건`을 별도 필드로 추가하고, 화면 구체값은 자막 유무와 무관하게
+    # 등재 의무로 명시한다.
+    def test_response_reports_cited_v_count_separately(self):
+        assert "V 복사 m건" in SYNTHESIZE
+        assert "V 인용 j건" in SYNTHESIZE
+
+    def test_concrete_screen_values_must_be_registered(self):
+        assert "구체값" in SYNTHESIZE
+        assert "설정값·UI 라벨·수치·파일명" in SYNTHESIZE
+        assert "자막이 말하지 않아도 K로 등재" in SYNTHESIZE
+
+    def test_screen_adopted_on_conflict_for_concrete_values(self):
+        assert "화면을 채택" in SYNTHESIZE
+
+    def test_floor_not_filled_by_transcript_only(self):
+        assert "하한을 자막만으로 채우지 마라" in SYNTHESIZE
