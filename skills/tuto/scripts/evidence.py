@@ -1106,13 +1106,22 @@ def screen_check(ev: dict, window: float = SCREEN_CHECK_WINDOW) -> list:
                 continue  # 창에 숫자를 가진 V가 없다 — 미관측, flag하지 않는다
             screen_set = set(screen_nums)
             for tok in dict.fromkeys(text_nums):  # 순서를 보존한 중복 제거
-                if tok not in screen_set:
-                    flags.append({
-                        "item_id": item.get("id"),
-                        "text_value": tok,
-                        "screen_candidates": sorted(screen_set),
-                        "v_ids": v_ids,
-                    })
+                if tok in screen_set:
+                    continue
+                # 자릿수가 같은 화면 값만 후보로 삼는다 — 설정값 오독은 같은 꼴로
+                # 어긋난다(25↔30). 실측 오탐(2026-08-22 통합 검증): "GPT image 2,
+                # 해상도 2K"의 `2`가 같은 창의 `25`와 짝지어져 문서에 "화면값 25
+                # (자막 2)"라는 거짓 경고가 실렸다. 정밀도를 재현율보다 앞세운다 —
+                # 헛경고는 v0.13.0에서 재확인 디스패치를 폐지시킨 바로 그 실패다.
+                same_shape = sorted(s for s in screen_set if len(s) == len(tok))
+                if not same_shape:
+                    continue
+                flags.append({
+                    "item_id": item.get("id"),
+                    "text_value": tok,
+                    "screen_candidates": same_shape,
+                    "v_ids": v_ids,
+                })
     return flags
 
 

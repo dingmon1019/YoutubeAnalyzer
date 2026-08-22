@@ -2404,3 +2404,40 @@ def test_cli_from_lines_screencheck_runs_on_coverage_audit_style_batch_too(tmp_p
     p = _run([str(tmp_path), "--from-lines", str(patch_file)])
     assert p.returncode == 0, f"stdout={p.stdout}\nstderr={p.stderr}"
     assert "SCREENCHECK 1" in p.stdout
+
+
+class TestScreenCheckPrecision:
+    """자릿수 일치 요건(컨트롤러 통합 검증, 2026-08-22).
+
+    Task A 1차 구현은 창 안의 모든 순수 숫자 V를 후보로 삼아, 실측 캐시에서
+    "GPT image 2, 해상도 2K"의 `2`를 같은 창의 `25`와 짝지어 문서에
+    "⚠️ 화면값 25 (자막 2)"라는 거짓 경고를 실었다. 헛경고는 v0.13.0에서
+    재확인 디스패치를 폐지시킨 실패라 정밀도를 재현율보다 앞세운다."""
+
+    @staticmethod
+    def _ev(text, screen_vals):
+        return {
+            "visual_evidence": [
+                {"id": f"v{i+1}", "type": "ui", "timestamp": 217.0,
+                 "frame": "f.jpg", "confidence": "high", "value": v}
+                for i, v in enumerate(screen_vals)],
+            "knowledge_items": [
+                {"id": "k1", "type": "setting", "timestamp": 216.0,
+                 "evidence": [], "content": text}],
+            "claims": [],
+        }
+
+    def test_same_digit_length_flags(self):
+        flags = evidence.screen_check(self._ev("Scale caption size down to 30", ["25"]))
+        assert len(flags) == 1
+        assert flags[0]["text_value"] == "30"
+        assert flags[0]["screen_candidates"] == ["25"]
+
+    def test_different_digit_length_is_not_flagged(self):
+        # 실측 오탐 그대로: 한 자리 `2`(GPT image 2 / 2K) vs 두 자리 화면값 25
+        assert evidence.screen_check(self._ev("GPT image 2, 해상도 2K로 지정", ["25"])) == []
+
+    def test_only_same_shape_candidates_are_reported(self):
+        flags = evidence.screen_check(self._ev("크기를 30으로", ["25", "5", "100"]))
+        assert len(flags) == 1
+        assert flags[0]["screen_candidates"] == ["25"]  # 5·100은 자릿수 불일치
