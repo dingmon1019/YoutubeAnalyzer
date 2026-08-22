@@ -160,6 +160,35 @@ def _transcript_signal(cache_dir) -> tuple:
     return len(text), _cjk_ratio(text)
 
 
+def _transcript_start_times(cache_dir):
+    """transcript.json의 segments[].start(초) 리스트 — Task 2: K/C 타임스탬프
+    자리 변이 복구 시 t# refs 유도용(`expand_lines`의 `t_times` 인자로 넘긴다).
+
+    없거나 파손이면 None(fail-soft) — --from-lines의 다른 처리를 막지 않는다.
+    세그먼트 하나라도 형식이 어긋나면(dict가 아니거나 start가 비수치) 인덱스
+    정합성이 깨지므로 부분 리스트 대신 통째로 None을 반환한다(t# 유도는
+    인덱스 위치에 의존하므로, 중간을 건너뛰면 엉뚱한 세그먼트를 가리킨다)."""
+    p = Path(cache_dir) / "transcript.json"
+    if not p.exists():
+        return None
+    try:
+        tr = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    segs = tr.get("segments") if isinstance(tr, dict) else None
+    if not isinstance(segs, list):
+        return None
+    out = []
+    for s in segs:
+        if not isinstance(s, dict):
+            return None
+        try:
+            out.append(float(s.get("start", 0)))
+        except (TypeError, ValueError):
+            return None
+    return out
+
+
 def _vision_v_count(cache_dir) -> int:
     """`vision-*.lines`(지도+확대) 전 파일의 `V\t` 시작 줄 수 — 화면에 실재하는
     값의 양. 읽을 수 없는 파일은 건너뛴다(fail-soft, 크래시 금지)."""
@@ -555,7 +584,61 @@ def _parse_refs(spec: str, id_offset: int = 0) -> list:
     return out
 
 
-def expand_lines(text: str, id_offset: int = 0) -> dict:
+# 타임스탬프 자리 변이(Task 2, info-budget 라운드) — refs 필드 패턴. K/C의
+# timestamp 자리가 통째로 빠지면(변이3) 그 자리에 refs가 대신 들어와 있다.
+# 이 정규식으로 "그 자리가 사실 refs다"를 판별한다.
+_REFS_SPEC_RE = re.compile(r"^[vt]\d+(;[vt]\d+)*$")
+
+
+def _prescan_v_timestamps(text: str) -> dict:
+    """V 라인의 로컬 순번(1-기준, `vn`과 동일한 증가 규칙) -> timestamp.
+
+    K/C 복구가 로컬 `v#` 참조를 즉시 풀 수 있도록 본 루프 전에 한 번 훑는다.
+    vn 증가는 본 루프와 완전히 같은 규칙이어야 한다 — kind가 "V"면 그 라인
+    자체의 다른 필드가 망가졌어도 vn은 증가한다(위 `_max_v_id_num` 문서의
+    "V가 드롭돼도 vn은 그대로 증가한다"와 동일 전제). timestamp 자체가
+    비수치면 그 vn은 맵에 남기지 않는다(조회 실패로 자연히 이어진다)."""
+    out = {}
+    vn = 0
+    for raw in text.splitlines():
+        if not raw.strip():
+            continue
+        f = raw.split("\t")
+        if f[0].strip() != "V":
+            continue
+        vn += 1
+        if len(f) > 2:
+            try:
+                out[vn] = float(f[2])
+            except ValueError:
+                pass
+    return out
+
+
+def _derive_ts_from_refs(spec: str, v_timestamps: dict, t_times) -> "float | None":
+    """복구된 K/C의 timestamp를 refs에서 유도한다 — 가짜 값(0.0 등)은 절대 만들지
+    않는다. 유도 불가면 None을 반환해 호출부가 기존대로 드롭하게 한다.
+
+    우선순위: refs 중 **첫 v#**가 같은 배치의 V로 풀리면 그 V의 timestamp.
+    없으면(v# 자체가 없거나 배치 안에서 못 풀면) **refs의 첫 토큰**이 t#일 때
+    자막 세그먼트 시작 시각(t_times[idx])을 쓴다. 둘 다 불가하면 None."""
+    toks = [t.strip() for t in (spec or "").split(";") if t.strip()]
+    first_v = next((t for t in toks if t[:1] == "v" and t[1:].isdigit()), None)
+    if first_v is not None:
+        ts = v_timestamps.get(int(first_v[1:]))
+        if ts is not None:
+            return ts
+    if toks and toks[0][:1] == "t" and toks[0][1:].isdigit() and t_times is not None:
+        idx = int(toks[0][1:])
+        if 0 <= idx < len(t_times):
+            try:
+                return float(t_times[idx])
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def expand_lines(text: str, id_offset: int = 0, t_times=None) -> dict:
     """TAB 구분 라인(T/V/K/C/G)을 evidence patch dict로 확장한다.
 
     **관용 드롭(전량거부 폐지, dense 브랜치 8346d04·8678bbd 이식)**: 사용자 정책
@@ -586,8 +669,24 @@ def expand_lines(text: str, id_offset: int = 0) -> dict:
     (0-기준 4)가 정확히 high|medium|low면 잉여 confidence로 보고 제거한 뒤 5필드로
     처리한다(실측: 합성이 refs와 content 사이에 confidence를 끼워 넣어 content가
     "high"로 오배선됐다). 그 외 필드 수 오류는 여전히 드롭+카운트다. 정규화 건수는
-    `_line_stats["normalized"]`에 담겨 조용히 삼켜지지 않고 CLI stdout에 보고된다."""
+    `_line_stats["normalized"]`에 담겨 조용히 삼켜지지 않고 CLI stdout에 보고된다.
+
+    **타임스탬프 자리 변이 복구(Task 2, info-budget 라운드, 실측 3연속 게이트)**:
+    K/C의 timestamp 자리가 float로 파싱되지 않으면 드롭 전에 복구를 시도한다.
+    (a) 그 자리가 confidence 단어(high|medium|low)면 제거하고 나머지를 규약대로
+    재배열한다(변이2). (b) 필드 수가 하나 모자라고 refs 패턴(`^[vt]\\d+(;[vt]\\d+)*$`)
+    이 timestamp 자리에 있으면 timestamp 누락으로 보고 refs를 그 자리로 인정한다
+    (변이3). 두 경우 모두 복구된 timestamp는 **refs에서 유도**한다(`_derive_ts_from_refs`
+    참고) — 첫 v#가 같은 배치의 V로 풀리면 그 timestamp, 없고 첫 ref가 t#이면
+    `t_times`(자막 세그먼트 시작 시각, 초 단위 리스트)에서, 둘 다 불가하면 기존대로
+    드롭한다. 근거 추적이 정본의 존재 이유이므로 0.0 같은 가짜 값은 절대 넣지 않는다.
+    복구 건수도 `_line_stats["normalized"]`에 포함된다(조용한 변조 금지).
+
+    t_times: 자막 세그먼트 start(초) 리스트. CLI(--from-lines)는 cache_dir의
+    transcript.json에서 읽어 넘긴다 — 없거나 파손이면 None(fail-soft)이고, 이
+    경우 t# refs로부터의 유도만 못 할 뿐 나머지 처리는 그대로 진행한다."""
     patch = {"visual_evidence": [], "claims": [], "knowledge_items": [], "gaps": []}
+    v_timestamps = _prescan_v_timestamps(text)
     vn = 0
     attempted = {"T": 0, "V": 0, "K": 0, "C": 0, "G": 0}
     dropped = {"T": 0, "V": 0, "K": 0, "C": 0, "G": 0}
@@ -620,18 +719,54 @@ def expand_lines(text: str, id_offset: int = 0) -> dict:
                     # 그 필드만 버리고 나머지를 5필드 규약대로 재배열한다.
                     kf = kf[:4] + kf[5:]
                     normalized["K"] += 1
-                if len(kf) != 5:
-                    raise ValueError(f"K 필드 수 {len(kf)} != 5")
-                patch["knowledge_items"].append({
-                    "type": kf[1], "timestamp": float(kf[2]),
-                    "evidence": _parse_refs(kf[3], id_offset), "content": kf[4]})
+                if len(kf) == 5 and kf[2] in CONFIDENCE:
+                    # 변이2: confidence 단어가 timestamp 자리를 차지 — 그 필드를
+                    # 들어내면 변이3과 같은 4필드 모양([K,type,refs,content])이
+                    # 되므로 아래 공통 복구 경로로 넘긴다.
+                    kf = [kf[0], kf[1], kf[3], kf[4]]
+                if len(kf) == 4 and _REFS_SPEC_RE.match(kf[2] or ""):
+                    # 변이3(또는 변이2 흡수 후): timestamp 필드가 통째로 빠져
+                    # refs가 그 자리를 차지한다. 가짜 timestamp를 넣지 않고
+                    # refs에서 유도한다 — 유도 불가면 기존대로 드롭한다.
+                    ts = _derive_ts_from_refs(kf[2], v_timestamps, t_times)
+                    if ts is None:
+                        raise ValueError("K: timestamp 복구 실패 — refs에서 유도할 수 없다")
+                    normalized["K"] += 1
+                    patch["knowledge_items"].append({
+                        "type": kf[1], "timestamp": ts,
+                        "evidence": _parse_refs(kf[2], id_offset), "content": kf[3]})
+                else:
+                    if len(kf) != 5:
+                        raise ValueError(f"K 필드 수 {len(kf)} != 5")
+                    patch["knowledge_items"].append({
+                        "type": kf[1], "timestamp": float(kf[2]),
+                        "evidence": _parse_refs(kf[3], id_offset), "content": kf[4]})
             elif kind == "C":
-                c = {"timestamp": float(f[1]), "evidence": _parse_refs(f[2], id_offset),
-                     "claim": f[3], "verification": {"status": "unaudited"}}
-                if len(f) > 4 and f[4].startswith("conflict="):
-                    a, _, b = f[4][len("conflict="):].partition("=>")
-                    c["conflict"] = {"transcript": a, "screen": b}
-                patch["claims"].append(c)
+                cf = f
+                if len(cf) > 1 and cf[1] in CONFIDENCE:
+                    # 변이2: confidence 단어가 timestamp 자리를 차지 — 들어내면
+                    # 변이3과 같은 모양([C,refs,claim[,conflict=...]])이 된다.
+                    cf = [cf[0]] + cf[2:]
+                if len(cf) >= 3 and _REFS_SPEC_RE.match(cf[1] or ""):
+                    # 변이3(또는 변이2 흡수 후): timestamp 필드가 통째로 빠져
+                    # refs가 그 자리를 차지한다.
+                    ts = _derive_ts_from_refs(cf[1], v_timestamps, t_times)
+                    if ts is None:
+                        raise ValueError("C: timestamp 복구 실패 — refs에서 유도할 수 없다")
+                    normalized["C"] += 1
+                    c = {"timestamp": ts, "evidence": _parse_refs(cf[1], id_offset),
+                         "claim": cf[2], "verification": {"status": "unaudited"}}
+                    if len(cf) > 3 and cf[3].startswith("conflict="):
+                        a, _, b = cf[3][len("conflict="):].partition("=>")
+                        c["conflict"] = {"transcript": a, "screen": b}
+                    patch["claims"].append(c)
+                else:
+                    c = {"timestamp": float(f[1]), "evidence": _parse_refs(f[2], id_offset),
+                         "claim": f[3], "verification": {"status": "unaudited"}}
+                    if len(f) > 4 and f[4].startswith("conflict="):
+                        a, _, b = f[4][len("conflict="):].partition("=>")
+                        c["conflict"] = {"transcript": a, "screen": b}
+                    patch["claims"].append(c)
             elif kind == "G":
                 patch["gaps"].append({"start": float(f[1]), "end": float(f[2]), "reason": f[3]})
         except (IndexError, ValueError):
@@ -1282,7 +1417,8 @@ def main() -> int:
             try:
                 expanded = expand_lines(
                     Path(args.from_lines).read_text(encoding="utf-8"),
-                    id_offset=_max_v_id_num(candidate.get("visual_evidence")))
+                    id_offset=_max_v_id_num(candidate.get("visual_evidence")),
+                    t_times=_transcript_start_times(cd))
             except ValueError as e:
                 print(f"INVALID: {e}", file=sys.stderr)
                 return 2
