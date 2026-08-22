@@ -168,8 +168,12 @@ class TestDensityDispatchRetryContract:
     def test_retry_cap_present_twice(self):
         assert TEXT.count("1회만 재시도") == 2
 
-    def test_retry_instruction_wording_present_twice(self):
-        assert TEXT.count("빈약 전사 감지 — 프레임당 값을 빠짐없이, 요약 금지") == 2
+    def test_retry_instruction_wording_present(self):
+        # 폐기 사유(thin-narrow, 2026-08-22): 재시도 예산이 영상당 1회가 되면서
+        # 4단계는 문구를 되풀이하지 않고 2단계를 참조한다("지시 문구는 2단계와
+        # 같다"). 2회 등장 요건은 그래서 1회로 완화한다 — 문구 자체는 계약이다.
+        assert TEXT.count("빈약 전사 감지 — 프레임당 값을 빠짐없이, 요약 금지") == 1
+        assert "지시 문구는 2단계와 같다" in TEXT
 
     def test_low_density_note_present(self):
         assert '저밀도 전사 n/장' in TEXT
@@ -235,3 +239,28 @@ class TestScreenGroundingRetryContract:
 
     def test_fallback_note_present(self):
         assert '--note "화면 근거 미인용"' in TEXT
+
+
+class TestThinRetryBudgetContract:
+    """재시도 예산 영상당 1회 (thin-narrow, 2026-08-22).
+
+    실측 8회 집계: 재시도의 효과는 대개 크다(0→16·9→67·5→53·11→32줄). 그러나
+    화면에 글씨가 없는 토킹헤드 영상에서는 두 패스가 각각 재시도를 태워 회당
+    $0.3~0.5를 헛썼고, 늘어난 72줄은 "링라이트·포스터" 같은 **장면 묘사**였다.
+    감지 자체는 유지하되(폐기하면 위 회수 사례가 전부 사라진다) 예산을 영상당
+    1회로 좁히고, 재시도 지시가 묘사로 줄 수를 채우는 것을 금지한다."""
+
+    def test_retry_budget_is_per_video(self):
+        assert "재시도 예산은 영상당 1회다" in TEXT
+        assert "2단계에서 재시도를 이미 썼으면 빈약 검사를 하지 마라" in TEXT
+
+    def test_retry_forbids_scene_padding(self):
+        assert "장면·사물 묘사로 줄 수를 채우지 마라" in TEXT
+
+    def test_empty_screen_is_a_valid_verdict(self):
+        assert "이 영상은 화면에 텍스트가 없는 것" in TEXT
+
+    def test_detection_itself_survives(self):
+        # 폐기가 아니라 축소다 — 감지 문구와 저밀도 note는 그대로 남아야 한다.
+        assert TEXT.count("M < N×2이면 빈약 전사") == 2
+        assert '저밀도 전사 n/장' in TEXT
