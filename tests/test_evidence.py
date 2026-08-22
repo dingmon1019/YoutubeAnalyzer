@@ -2190,3 +2190,288 @@ def test_cli_from_lines_malformed_transcript_json_falls_back_to_none_without_cra
     assert p.returncode == 0, f"stdout={p.stdout}\nstderr={p.stderr}"
     assert "Traceback" not in p.stderr
     assert "DROPPED 1" in p.stdout
+
+
+# ── 화면↔지식 검문 screen_check (grounding 라운드 Task A) ───────────────────
+
+def _screen_check_fixture():
+    """실측 회귀 고정(pwGeWRlrU10 03:33~03:37): 자막 유래 '30'과 화면 '25'가
+    ±90초 창에서 병존하는 실패 사례를 재현한다. v6("Size")은 라벨이라 숫자
+    후보가 아니고, v7("25")만 순수 숫자라 후보가 된다(실측 캐시와 동일 구조)."""
+    return {
+        "knowledge_items": [
+            {"id": "k1", "type": "setting", "content": "Scale caption size down to 30",
+             "timestamp": 188.0, "evidence": [{"source": "transcript", "ref": "27"}],
+             "verification": {"status": "unaudited"}}],
+        "claims": [],
+        "visual_evidence": [
+            {"id": "v6", "type": "ui", "timestamp": 217.0, "frame": "f.jpg",
+             "confidence": "medium", "value": "Size"},
+            {"id": "v7", "type": "ui", "timestamp": 217.0, "frame": "f.jpg",
+             "confidence": "medium", "value": "25"}],
+    }
+
+
+def test_screen_check_flags_setting_value_missing_from_in_window_screen_values():
+    """25↔30 실패 사례 그대로 재현 — flag 1건, v7('25')과 함께."""
+    flags = evidence.screen_check(_screen_check_fixture())
+    assert flags == [{"item_id": "k1", "text_value": "30",
+                       "screen_candidates": ["25"], "v_ids": ["v7"]}]
+
+
+def test_screen_check_ignores_v_outside_window():
+    """창 밖 V는 무시한다 — 창 밖에 우연히 일치하는 '30'이 있어도 flag를 억제하지
+    않는다(대조 대상에서 아예 빠져야 한다)."""
+    ev = _screen_check_fixture()
+    ev["visual_evidence"].append({"id": "v99", "type": "ui", "timestamp": 188.0 + 91,
+                                  "frame": "f.jpg", "confidence": "high", "value": "30"})
+    flags = evidence.screen_check(ev)
+    assert flags == [{"item_id": "k1", "text_value": "30",
+                       "screen_candidates": ["25"], "v_ids": ["v7"]}]
+
+
+def test_screen_check_no_flag_when_window_has_no_v_at_all():
+    """창에 V가 없으면 flag하지 않는다 — 미관측은 모순이 아니다."""
+    ev = _screen_check_fixture()
+    ev["visual_evidence"] = []
+    assert evidence.screen_check(ev) == []
+
+
+def test_screen_check_no_flag_when_window_v_have_no_numeric_value():
+    """창에 V는 있어도 값이 전부 비숫자("Size" 같은 라벨)면 무flag — 숫자를
+    가진 V가 하나도 없는 것과 동치다."""
+    ev = _screen_check_fixture()
+    ev["visual_evidence"] = [v for v in ev["visual_evidence"] if v["id"] == "v6"]
+    assert evidence.screen_check(ev) == []
+
+
+def test_screen_check_skips_non_setting_command_type_even_with_dollar_digit():
+    """`$25`처럼 자막 유래 수치가 있어도 type이 setting/command가 아니면(예: concept)
+    무flag — 범위를 좁혀 오탐을 막는다는 계약."""
+    ev = _screen_check_fixture()
+    ev["knowledge_items"][0]["type"] = "concept"
+    ev["knowledge_items"][0]["content"] = "가격은 $25 정도다"
+    assert evidence.screen_check(ev) == []
+
+
+def test_screen_check_checks_claims_too_when_type_is_setting_or_command():
+    """claims도 type이 setting|command면 검문 대상이다 — knowledge_items 전용이 아니다."""
+    ev = _screen_check_fixture()
+    ev["knowledge_items"] = []
+    ev["claims"] = [{"id": "c1", "type": "setting", "claim": "Scale caption size down to 30",
+                     "timestamp": 188.0, "evidence": [{"source": "transcript", "ref": "27"}],
+                     "verification": {"status": "unaudited"}}]
+    flags = evidence.screen_check(ev)
+    assert flags == [{"item_id": "c1", "text_value": "30",
+                       "screen_candidates": ["25"], "v_ids": ["v7"]}]
+
+
+def test_apply_screen_check_marks_screen_conflict_without_mutating_body_text():
+    """정본 표기 — 본문 문자열은 그대로 두고 screen_conflict만 얹는다(자동 치환 금지,
+    플랜 Task A §2)."""
+    ev = _screen_check_fixture()
+    flags = evidence.apply_screen_check(ev)
+    assert len(flags) == 1
+    k = ev["knowledge_items"][0]
+    assert k["content"] == "Scale caption size down to 30"       # 본문 불변
+    assert k["screen_conflict"] == {"text": "30", "screen": ["25"], "v_ids": ["v7"]}
+
+
+def test_apply_screen_check_accepts_precomputed_flags():
+    """flags를 미리 계산해 넘기면 재계산 없이 그대로 표기한다."""
+    ev = _screen_check_fixture()
+    flags = evidence.screen_check(ev)
+    evidence.apply_screen_check(ev, flags)
+    assert ev["knowledge_items"][0]["screen_conflict"]["text"] == "30"
+
+
+# ── render_video_md: screen_conflict 노출 ──────────────────────────────────
+
+def test_render_shows_screen_conflict_marker():
+    """게이트 기준(플랜 Task A §3): 렌더된 줄 끝에 ⚠️ 화면값 25 (자막 30)이 붙는다."""
+    ev = _render_fixture()
+    ev["knowledge_items"][0]["screen_conflict"] = {"text": "30", "screen": ["25"], "v_ids": ["v7"]}
+    md = evidence.render_video_md(ev)
+    assert "⚠️ 화면값 25 (자막 30)" in md
+
+
+# ── K type 별칭 정규화(Task A 5) ────────────────────────────────────────────
+
+def test_expand_lines_k_type_alias_setting_suffix_normalizes():
+    """실측 회귀: font-setting·layout-setting처럼 `*-setting` 접미사는 setting으로
+    정규화된다(드롭이 아니라 매핑) — 커버리지 감사 전량 거부 원인이었다."""
+    p = evidence.expand_lines("K\tfont-setting\t1.0\tv1\t폰트 크게\n")
+    assert p["knowledge_items"][0]["type"] == "setting"
+    assert p["_line_stats"]["dropped"]["K"] == 0
+    assert p["_line_stats"]["normalized"]["K"] == 1
+
+
+def test_expand_lines_k_type_alias_config_normalizes_to_setting():
+    p = evidence.expand_lines("K\tconfig\t1.0\tv1\t설정값\n")
+    assert p["knowledge_items"][0]["type"] == "setting"
+    assert p["_line_stats"]["normalized"]["K"] == 1
+
+
+def test_expand_lines_k_type_alias_step_normalizes_to_procedure():
+    p = evidence.expand_lines("K\tstep\t1.0\tv1\t첫 단계\n")
+    assert p["knowledge_items"][0]["type"] == "procedure"
+    assert p["_line_stats"]["normalized"]["K"] == 1
+
+
+def test_expand_lines_k_type_alias_tip_normalizes_to_warning():
+    p = evidence.expand_lines("K\ttip\t1.0\tv1\t유용한 팁\n")
+    assert p["knowledge_items"][0]["type"] == "warning"
+    assert p["_line_stats"]["normalized"]["K"] == 1
+
+
+def test_expand_lines_k_type_alias_note_normalizes_to_warning():
+    p = evidence.expand_lines("K\tnote\t1.0\tv1\t참고\n")
+    assert p["knowledge_items"][0]["type"] == "warning"
+    assert p["_line_stats"]["normalized"]["K"] == 1
+
+
+def test_expand_lines_k_type_unknown_falls_back_to_concept_not_dropped():
+    """별칭에도 없는 미지 type은 드롭 대신 concept으로 강제한다 — 드롭 0."""
+    p = evidence.expand_lines("K\tmystery\t1.0\tv1\t알 수 없는 유형\n")
+    assert p["knowledge_items"][0]["type"] == "concept"
+    assert p["_line_stats"]["dropped"]["K"] == 0
+    assert p["_line_stats"]["normalized"]["K"] == 1
+
+
+def test_expand_lines_k_type_already_valid_not_counted_as_normalized():
+    """이미 유효한 enum 값은 정규화 대상이 아니다 — normalized가 거짓으로 올라가면
+    안 된다."""
+    p = evidence.expand_lines("K\tsetting\t1.0\tv1\t정상 설정\n")
+    assert p["knowledge_items"][0]["type"] == "setting"
+    assert p["_line_stats"]["normalized"]["K"] == 0
+
+
+# ── CLI --from-lines: SCREENCHECK stdout (Task A 4) ────────────────────────
+
+def test_cli_from_lines_prints_screencheck_when_text_value_missing_on_screen(tmp_path):
+    """실측 회귀(pwGeWRlrU10 03:33~03:37): 합성 배치(V+K 동시 병합)에서 자막
+    유래 '30'과 화면 '25'가 병존하면 SCREENCHECK 1을 stdout에 낸다."""
+    ev = evidence.register_frames(_skel(), ["f1.jpg"])
+    evidence.save(tmp_path, ev)
+    text = (
+        "V\tui\t217.0\tf1.jpg\tmedium\t25\n"
+        "K\tsetting\t188.0\tv1\tScale caption size down to 30\n"
+    )
+    patch_file = tmp_path / "patch.lines"
+    patch_file.write_text(text, encoding="utf-8")
+
+    p = _run([str(tmp_path), "--from-lines", str(patch_file)])
+    assert p.returncode == 0, f"stdout={p.stdout}\nstderr={p.stderr}"
+    assert "SCREENCHECK 1" in p.stdout
+
+    merged = evidence.load(tmp_path)
+    k = merged["knowledge_items"][0]
+    assert k["content"] == "Scale caption size down to 30"        # 본문 불변
+    assert k["screen_conflict"] == {"text": "30", "screen": ["25"], "v_ids": ["v1"]}
+
+
+def test_cli_from_lines_screencheck_absent_from_stdout_when_zero(tmp_path):
+    """0건이면 SCREENCHECK 자체가 stdout에 나타나지 않는다(NORMALIZED와 동일 관례
+    — 잡음 섞인 보고 금지)."""
+    ev = evidence.register_frames(_skel(), ["f1.jpg"])
+    evidence.save(tmp_path, ev)
+    text = (
+        "V\tui\t217.0\tf1.jpg\tmedium\t25\n"
+        "K\tsetting\t188.0\tv1\tScale caption size down to 25\n"
+    )
+    patch_file = tmp_path / "patch.lines"
+    patch_file.write_text(text, encoding="utf-8")
+
+    p = _run([str(tmp_path), "--from-lines", str(patch_file)])
+    assert p.returncode == 0, f"stdout={p.stdout}\nstderr={p.stderr}"
+    assert "SCREENCHECK" not in p.stdout
+
+
+def test_cli_from_lines_screencheck_runs_on_coverage_audit_style_batch_too(tmp_path):
+    """커버리지 감사분도 같은 --from-lines 경로를 타므로 검문이 걸려야 한다 —
+    이번 실패의 2번 원인(감사 경로의 구멍)을 봉쇄하는 회귀. 감사는 설계상
+    텍스트 전용(화면 접근 없음)이라 evidence는 t#(transcript) 참조만 쓰지만,
+    이미 병합된 V(화면)와는 여전히 대조돼야 한다."""
+    ev = evidence.register_frames(_skel(), ["f1.jpg"])
+    ev = evidence.merge(ev, {"visual_evidence": [
+        {"type": "ui", "value": "25", "timestamp": 217.0, "frame": "f1.jpg", "confidence": "medium"}]})
+    evidence.save(tmp_path, ev)
+    # 커버리지 감사 보강 배치 — 화면에 접근하지 않고 자막만 보고 낸 K(화면과 반대되는 값)
+    text = "K\tsetting\t188.0\tt0\tScale caption size down to 30\n"
+    patch_file = tmp_path / "coverage.lines"
+    patch_file.write_text(text, encoding="utf-8")
+
+    p = _run([str(tmp_path), "--from-lines", str(patch_file)])
+    assert p.returncode == 0, f"stdout={p.stdout}\nstderr={p.stderr}"
+    assert "SCREENCHECK 1" in p.stdout
+
+
+class TestScreenCheckPrecision:
+    """자릿수 일치 요건(컨트롤러 통합 검증, 2026-08-22).
+
+    Task A 1차 구현은 창 안의 모든 순수 숫자 V를 후보로 삼아, 실측 캐시에서
+    "GPT image 2, 해상도 2K"의 `2`를 같은 창의 `25`와 짝지어 문서에
+    "⚠️ 화면값 25 (자막 2)"라는 거짓 경고를 실었다. 헛경고는 v0.13.0에서
+    재확인 디스패치를 폐지시킨 실패라 정밀도를 재현율보다 앞세운다."""
+
+    @staticmethod
+    def _ev(text, screen_vals):
+        return {
+            "visual_evidence": [
+                {"id": f"v{i+1}", "type": "ui", "timestamp": 217.0,
+                 "frame": "f.jpg", "confidence": "high", "value": v}
+                for i, v in enumerate(screen_vals)],
+            "knowledge_items": [
+                {"id": "k1", "type": "setting", "timestamp": 216.0,
+                 "evidence": [], "content": text}],
+            "claims": [],
+        }
+
+    def test_same_digit_length_flags(self):
+        flags = evidence.screen_check(self._ev("Scale caption size down to 30", ["25"]))
+        assert len(flags) == 1
+        assert flags[0]["text_value"] == "30"
+        assert flags[0]["screen_candidates"] == ["25"]
+
+    def test_different_digit_length_is_not_flagged(self):
+        # 실측 오탐 그대로: 한 자리 `2`(GPT image 2 / 2K) vs 두 자리 화면값 25
+        assert evidence.screen_check(self._ev("GPT image 2, 해상도 2K로 지정", ["25"])) == []
+
+    def test_only_same_shape_candidates_are_reported(self):
+        flags = evidence.screen_check(self._ev("크기를 30으로", ["25", "5", "100"]))
+        assert len(flags) == 1
+        assert flags[0]["screen_candidates"] == ["25"]  # 5·100은 자릿수 불일치
+
+
+class TestScreenPoolFromCache:
+    """미등재 원본 관측까지 검문 후보로 (컨트롤러 통합 검증, 2026-08-22).
+
+    선별 등재(v0.13.0) 이후 정본의 V는 인용된 것뿐이라, 지식과 어긋나는 화면
+    값일수록 등재되지 않아 검문을 통째로 빠져나간다 — 실측 게이트에서 정확히
+    그렇게 통과됐다. 원본은 캐시에 남는다는 선별 등재의 전제를 검문이 쓴다.
+    오프라인 정밀도(보존 캐시 7종·관측 풀 최대 542건·지식 436건): 오탐 0."""
+
+    def _cache(self, tmp_path, lines):
+        (tmp_path / "vision-zoom.lines").write_text(lines, encoding="utf-8")
+        return tmp_path
+
+    def test_pool_reads_v_lines(self, tmp_path):
+        self._cache(tmp_path, "V\tui\t217.0\tt0337_512.jpg\thigh\t25\n"
+                              "T\ttutorial\thigh\t헤더는 무시\n")
+        pool = evidence.screen_pool_from_cache(tmp_path)
+        assert [p["value"] for p in pool] == ["25"]
+        assert pool[0]["timestamp"] == 217.0
+        assert "t0337_512.jpg" in pool[0]["id"]  # 추적 가능한 출처
+
+    def test_unregistered_screen_value_is_caught(self, tmp_path):
+        self._cache(tmp_path, "V\tui\t217.0\tt0337_512.jpg\thigh\t25\n")
+        ev = {"visual_evidence": [],   # 인용되지 않아 정본에 없다
+              "knowledge_items": [{"id": "k1", "type": "setting", "timestamp": 216.0,
+                                   "evidence": [], "content": "크기를 30으로 축소한다"}],
+              "claims": []}
+        assert evidence.screen_check(ev) == []           # 정본만 보면 못 잡는다
+        flags = evidence.screen_check(ev, extra_pool=evidence.screen_pool_from_cache(tmp_path))
+        assert len(flags) == 1 and flags[0]["screen_candidates"] == ["25"]
+
+    def test_missing_cache_is_fail_soft(self, tmp_path):
+        assert evidence.screen_pool_from_cache(tmp_path / "없는디렉토리") == []

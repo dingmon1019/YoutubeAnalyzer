@@ -50,6 +50,28 @@ KNOWLEDGE_TYPES = ("concept", "procedure", "action", "command", "setting",
                    "prerequisite", "result", "criterion", "warning",
                    "example", "comparison")
 
+# K type 별칭 — 게이트 실패 흡수(grounding 라운드 Task A 5, 실측: 커버리지 감사가
+# font-setting·layout-setting을 내 배치 전량 거부 → 왕복 1회). V type 별칭과 동일
+# 원칙: 라벨 오류로 실제 지식을 버리지 않는다. `*-setting` 접미사는 dict key로 못
+# 담으므로 _normalize_knowledge_type이 고정 별칭(dict)과 접미사 규칙을 함께 본다.
+KNOWLEDGE_TYPE_ALIASES = {"config": "setting", "step": "procedure",
+                          "tip": "warning", "note": "warning"}
+
+
+def _normalize_knowledge_type(t) -> tuple:
+    """K type이 KNOWLEDGE_TYPES 밖이면 별칭 정규화한다(드롭하지 않는다).
+
+    반환: (정규화된 type, 정규화가 일어났는가). 매핑: `*-setting`·`config`→`setting`,
+    `step`→`procedure`, `tip`·`note`→`warning`, 그 외(별칭에도 없는 미분류)→
+    `concept`(빈 카테고리를 만들지 않되 실제 관측을 버리지도 않는다)."""
+    if t in KNOWLEDGE_TYPES:
+        return t, False
+    if isinstance(t, str) and t.endswith("-setting"):
+        return "setting", True
+    if isinstance(t, str) and t in KNOWLEDGE_TYPE_ALIASES:
+        return KNOWLEDGE_TYPE_ALIASES[t], True
+    return "concept", True
+
 # 표본 감사 우선순위 — **호출한 에이전트의 행동에 영향을 주는 정도** 순이다.
 # 잘못 판독된 `command`("pip install package-x")나 `setting`("CUDA 12.6")은 단순 주장
 # 오류보다 실전에서 훨씬 위험하다. 영상 유형별 고정 비율은 만들지 않는다 — 존재하는
@@ -724,6 +746,12 @@ def expand_lines(text: str, id_offset: int = 0, t_times=None) -> dict:
                     # 들어내면 변이3과 같은 4필드 모양([K,type,refs,content])이
                     # 되므로 아래 공통 복구 경로로 넘긴다.
                     kf = [kf[0], kf[1], kf[3], kf[4]]
+                # K type 별칭 정규화(Task A 5) — kf[1]은 위 두 재배열을 거쳐도 항상
+                # type 자리다(인덱스가 이동하지 않는다). 드롭 대신 매핑하고 실제
+                # 정규화가 일어났을 때만 카운트한다(이미 유효한 값은 그대로).
+                ktype, k_type_norm = _normalize_knowledge_type(kf[1])
+                if k_type_norm:
+                    normalized["K"] += 1
                 if len(kf) == 4 and _REFS_SPEC_RE.match(kf[2] or ""):
                     # 변이3(또는 변이2 흡수 후): timestamp 필드가 통째로 빠져
                     # refs가 그 자리를 차지한다. 가짜 timestamp를 넣지 않고
@@ -733,13 +761,13 @@ def expand_lines(text: str, id_offset: int = 0, t_times=None) -> dict:
                         raise ValueError("K: timestamp 복구 실패 — refs에서 유도할 수 없다")
                     normalized["K"] += 1
                     patch["knowledge_items"].append({
-                        "type": kf[1], "timestamp": ts,
+                        "type": ktype, "timestamp": ts,
                         "evidence": _parse_refs(kf[2], id_offset), "content": kf[3]})
                 else:
                     if len(kf) != 5:
                         raise ValueError(f"K 필드 수 {len(kf)} != 5")
                     patch["knowledge_items"].append({
-                        "type": kf[1], "timestamp": float(kf[2]),
+                        "type": ktype, "timestamp": float(kf[2]),
                         "evidence": _parse_refs(kf[3], id_offset), "content": kf[4]})
             elif kind == "C":
                 cf = f
@@ -1021,6 +1049,138 @@ def validate(ev: dict) -> list:
     return errs
 
 
+# ── 화면↔지식 검문 (screen_check, grounding 라운드 Task A) ──────────────────
+# 실패 사례(pwGeWRlrU10 03:33~03:37): 자막 "scale it down to 30"과 화면 확대
+# 프레임의 "Size → 25"가 병존했는데 정본에는 자막값 30만 실렸다. cross_check_values는
+# visual_evidence **내부만** 순회해 이 불일치를 못 잡는다(화면과 지식을 마주 놓는
+# 코드가 없었다) — 이 함수가 그 구멍을 메운다. type을 setting·command로 좁히는
+# 이유: 이 두 유형만 "화면이 정본"이라는 계약을 갖는다(개념 서술의 수치 언급까지
+# 대조하면 오탐이 는다). 편집거리는 쓰지 않는다 — 25↔30은 거리 2라
+# cross_check_values의 _near_miss(거리 1 전용)로는 원래 못 잡는다.
+SCREEN_CHECK_WINDOW = 90.0
+_SCREEN_NUM_RE = re.compile(r"\d+(?:\.\d+)?")          # 본문 숫자 토큰(부분 일치)
+_SCREEN_NUM_FULL_RE = re.compile(r"^\d+(?:\.\d+)?$")   # 화면 후보 — 값 전체가 숫자
+
+
+def screen_pool_from_cache(cache_dir) -> list:
+    """캐시의 원본 화면 전사(vision-*.lines·gap*.lines)에서 V 관측을 전부 긁어
+    검문용 후보 풀로 만든다 — 등재 여부와 무관하다.
+
+    선별 등재(v0.13.0) 이후 정본에 남는 V는 **인용된 것뿐**이라, 지식과 어긋나는
+    화면 값일수록 등재되지 않아 검문의 사각으로 떨어진다(실측 2026-08-22: 지식은
+    자막의 30을 실었고 화면의 25는 인용되지 않아 정본에 없었다). 원본은 캐시에
+    보존된다는 선별 등재의 전제를 여기서 쓴다. 파일이 없거나 파손이면 빈 목록
+    (fail-soft — 검문이 파이프라인을 죽이면 안 된다)."""
+    pool = []
+    d = Path(cache_dir)
+    if not d.is_dir():
+        return pool
+    for f in sorted(d.glob("vision-*.lines")) + sorted(d.glob("gap*.lines")):
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for ln in text.splitlines():
+            parts = ln.split("\t")
+            if len(parts) < 6 or parts[0] != "V":
+                continue
+            try:
+                ts = float(parts[2])
+            except ValueError:
+                continue
+            pool.append({"id": f"{f.name}@{parts[3]}", "timestamp": ts,
+                         "value": parts[5].strip()})
+    return pool
+
+
+def screen_check(ev: dict, window: float = SCREEN_CHECK_WINDOW,
+                 extra_pool: list = None) -> list:
+    """knowledge_items·claims 중 type이 setting|command인 항목의 본문 숫자 토큰을
+    ±window초 창의 화면 관측(정본 visual_evidence + `extra_pool`)과 대조한다.
+
+    `extra_pool`은 `screen_pool_from_cache()`가 만든 미등재 원본 관측이다 —
+    정본만 보면 인용되지 않은 화면 값이 검문을 통째로 빠져나간다.
+
+    화면 후보는 visual_evidence.value가 **전체가 순수 숫자**(정수·소수)인 V만
+    센다 — "Position 1"·"Kelly 3"처럼 라벨에 숫자가 섞인 값은 대조 대상이 아니다
+    (실측 fixture pwGeWRlrU10: `Size` 라벨과 `25` 값이 애초에 별개 V로 갈라져
+    있다 — 화면 판독이 이미 라벨과 값을 분리해 담는 관례를 따른다).
+
+    flag 조건: (1) 본문에 숫자 토큰이 있고, (2) 그 창에 순수 숫자 값을 가진 V가
+    하나 이상 있고(미관측이면 flag하지 않는다 — **미관측 ≠ 모순**), (3) 본문
+    숫자 토큰 중 하나 이상이 그 V들의 값 어디에도 없을 때.
+
+    반환: [{"item_id", "text_value", "screen_candidates": [...], "v_ids": [...]}]
+    본문 숫자 토큰마다 최대 1건씩 낸다(여러 개가 어긋나면 여러 건)."""
+    ve_list = [v for v in ev.get("visual_evidence") or [] if isinstance(v, dict)]
+    ve_list += [v for v in (extra_pool or []) if isinstance(v, dict)]
+    flags = []
+    for coll, text_key in (("knowledge_items", "content"), ("claims", "claim")):
+        for item in ev.get(coll) or []:
+            if not isinstance(item, dict) or item.get("type") not in ("setting", "command"):
+                continue
+            text_nums = _SCREEN_NUM_RE.findall(str(item.get(text_key) or ""))
+            if not text_nums:
+                continue
+            try:
+                ts = float(item.get("timestamp"))
+            except (TypeError, ValueError):
+                continue
+            v_ids, screen_nums = [], []
+            for v in ve_list:
+                try:
+                    vt = float(v.get("timestamp"))
+                except (TypeError, ValueError):
+                    continue
+                if abs(vt - ts) > window:
+                    continue  # 창 밖 V는 무시
+                val = str(v.get("value") or "").strip()
+                if _SCREEN_NUM_FULL_RE.match(val):
+                    v_ids.append(v.get("id"))
+                    screen_nums.append(val)
+            if not v_ids:
+                continue  # 창에 숫자를 가진 V가 없다 — 미관측, flag하지 않는다
+            screen_set = set(screen_nums)
+            for tok in dict.fromkeys(text_nums):  # 순서를 보존한 중복 제거
+                if tok in screen_set:
+                    continue
+                # 자릿수가 같은 화면 값만 후보로 삼는다 — 설정값 오독은 같은 꼴로
+                # 어긋난다(25↔30). 실측 오탐(2026-08-22 통합 검증): "GPT image 2,
+                # 해상도 2K"의 `2`가 같은 창의 `25`와 짝지어져 문서에 "화면값 25
+                # (자막 2)"라는 거짓 경고가 실렸다. 정밀도를 재현율보다 앞세운다 —
+                # 헛경고는 v0.13.0에서 재확인 디스패치를 폐지시킨 바로 그 실패다.
+                same_shape = sorted(s for s in screen_set if len(s) == len(tok))
+                if not same_shape:
+                    continue
+                flags.append({
+                    "item_id": item.get("id"),
+                    "text_value": tok,
+                    "screen_candidates": same_shape,
+                    "v_ids": v_ids,
+                })
+    return flags
+
+
+def apply_screen_check(ev: dict, flags: list = None, extra_pool: list = None) -> list:
+    """screen_check 결과를 대상 항목에 `screen_conflict`로 표기한다.
+
+    **본문 문자열은 절대 건드리지 않는다** — 조용한 변조 금지, 사람이 보게
+    만드는 게 목적이다(플랜 Task A §2: "본문 자동 치환 금지"). flags를 안
+    넘기면 screen_check(ev)를 새로 돌린다. 반환값은 적용된 flags 목록."""
+    if flags is None:
+        flags = screen_check(ev, extra_pool=extra_pool)
+    idx = _audit_index(ev)
+    for fl in flags:
+        item = idx.get(fl["item_id"])
+        if item is not None:
+            item["screen_conflict"] = {
+                "text": fl["text_value"],
+                "screen": fl["screen_candidates"],
+                "v_ids": fl["v_ids"],
+            }
+    return flags
+
+
 # ── video.md 렌더러 — "정본은 evidence.json, video.md는 그것의 렌더링"의 문자적 구현.
 # LLM이 16KB 문서를 출력하던 비용(solo 실측 output의 약 절반)을 0으로 만든다.
 # 자율 구성 대신 고정 템플릿 — 값·근거는 evidence와 바이트 단위로 동일하다.
@@ -1057,6 +1217,13 @@ def _item_line(item: dict, text_key: str) -> str:
     cf = item.get("conflict")
     if isinstance(cf, dict) and cf:
         line += f" — ⚠️ 자막 \"{cf.get('transcript', '')}\" vs 화면 \"{cf.get('screen', '')}\" (화면 채택)"
+    sc = item.get("screen_conflict")
+    if isinstance(sc, dict) and sc:
+        # screen_check가 낸 결정론적 화면↔지식 불일치 — screen_conflict, 조용한 치환
+        # 금지 원칙(Task A §2)에 따라 본문은 그대로 두고 줄 끝에만 표기한다.
+        screen_vals = sc.get("screen")
+        screen_str = ",".join(screen_vals) if isinstance(screen_vals, list) else str(screen_vals or "")
+        line += f" — ⚠️ 화면값 {screen_str} (자막 {sc.get('text', '')})"
     return line
 
 
@@ -1449,6 +1616,16 @@ def main() -> int:
             from_lines_dropped = sum(from_lines_stats["dropped"].values())
             from_lines_normalized = sum(from_lines_stats.get("normalized", {}).values())
             candidate = merge(candidate, expanded)
+            # 화면↔지식 검문(Task A 4): 합성분·보강분·커버리지 감사분 모두 이
+            # --from-lines 경로 하나로 들어오므로, 여기 한 곳에 걸면 모든 병합에
+            # 자동으로 걸린다 — 감사 경로만 빠지던 실패 사례의 구멍을 막는다.
+            # 본문은 건드리지 않고 screen_conflict만 표기한다(candidate는 validate·
+            # save 전이므로, 통과 못 하면 이 표기도 함께 버려진다 — 조용한 잔류 없음).
+            # 후보 풀에 캐시의 **미등재 원본 관측**까지 넣는다 — 선별 등재 이후
+            # 지식과 어긋나는 화면 값일수록 인용되지 않아 정본에 없다(실측: 화면
+            # 25가 등재되지 않아 검문이 자막 30을 통과시켰다).
+            screen_flags = apply_screen_check(
+                candidate, extra_pool=screen_pool_from_cache(args.cache_dir))
         if args.merge:
             candidate = merge(candidate, json.loads(Path(args.merge).read_text(encoding="utf-8")))
         if args.verdicts:
@@ -1472,6 +1649,10 @@ def main() -> int:
             if from_lines_normalized > 0:
                 msg += f" NORMALIZED {from_lines_normalized}"
             print(msg)
+            # SCREENCHECK n(Task A 4): n>0일 때만 낸다 — 0건까지 찍으면 매 병합마다
+            # 잡음이 섞여 조용한 실패 탐지를 오히려 방해한다(NORMALIZED와 동일 관례).
+            if screen_flags:
+                print(f"SCREENCHECK {len(screen_flags)}")
 
     if args.cross_check:
         flags = cross_check_values(ev)

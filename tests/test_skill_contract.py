@@ -210,3 +210,28 @@ class TestDensityCureContract:
 
     def test_retry_safety_net_stays_twice(self):
         assert TEXT.count("1회만 재시도") == 2
+
+
+class TestScreenGroundingRetryContract:
+    # 근거 인용 감지 라운드(2026-08-22): 지식 60건 중 frame 인용 0건 실측 실패 — V를
+    # 10건 복사해 놓고 한 건도 K/C가 인용하지 않았다. `V 인용 j건`을 `V 복사 m건`과
+    # 별도로 받아야 본체가 "복사만 하고 인용 안 함"을 감지할 수 있다. 빈약 전사
+    # 감지(TestDensityDispatchRetryContract)와 동형 패턴이나, "1회만 재시도" 문구는
+    # 그 계약이 정확히 2회로 고정해 뒀으므로 별도 문구("1회 한정 재시도")로 충돌을
+    # 피한다.
+    def test_synthesis_response_reports_v_citation_count(self):
+        assert "V 인용 j건" in TEXT
+
+    def test_detection_threshold_ten_v_lines(self):
+        assert "V 관측이 10줄 이상이면 화면 근거 미인용" in TEXT
+
+    def test_retry_capped_once_distinct_phrase(self):
+        # 기존 "1회만 재시도" 정확 카운트(==2)를 건드리지 않도록 별도 문구를 쓴다.
+        assert "1회 한정 재시도" in TEXT
+        assert TEXT.count("1회만 재시도") == 2  # 회귀 방지: 그대로 2여야 한다
+
+    def test_retry_instruction_mentions_v_citation(self):
+        assert "화면 근거 미인용 감지 — 화면 구체값을 K로 등재하고 v# 인용" in TEXT
+
+    def test_fallback_note_present(self):
+        assert '--note "화면 근거 미인용"' in TEXT

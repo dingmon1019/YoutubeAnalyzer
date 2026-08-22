@@ -60,7 +60,10 @@ NOTE(yt-dlp 최신성·JS 런타임 부재)는 사용자에게 한 줄 알린다
 "`<PROMPTS>/synthesize.md`를 Read하고 수행. **K 예산: 하한 <n>건 · 천장 <m>건**.
 입력: pass1-report.txt, vision-map.lines, vision-zoom.lines. 출력:
 <cache_dir>/patch.lines". 인용 V만 복사 + K/C/G — 단일 배치가 계약이다. 최종 응답
-`T=<영상유형>, K n건, C n건, V 복사 m건, ⚠️ k건`에서 9단계 보고용 수치를 얻는다.
+`T=<영상유형>, K n건, C n건, V 복사 m건, V 인용 j건, ⚠️ k건`에서 9단계 보고용 수치를 얻는다.
+**j=0인데 vision-*.lines에 V 관측이 10줄 이상이면 화면 근거 미인용** — 같은 디스패치를
+1회 한정 재시도한다(지시에 '화면 근거 미인용 감지 — 화면 구체값을 K로 등재하고 v# 인용' 추가).
+재시도 후에도 j=0이면 진행하되 8단계 `--note "화면 근거 미인용"`.
 
 **6. 병합 + 교차 대조.**
 `evidence.py "<cache_dir>" --from-lines "<cache_dir>/patch.lines" --cross-check` 한 호출 —
