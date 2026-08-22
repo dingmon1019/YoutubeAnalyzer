@@ -116,9 +116,12 @@ class TestTranscriptOnlyValueContract:
 
 
 class TestExtractionCapContract:
-    # 3레버 라운드(2026-08-19): 상한 없는 추출이 절감분을 소비하는 회귀 차단
+    # 3레버 라운드(2026-08-19): 상한 없는 추출이 절감분을 소비하는 회귀 차단.
+    # 폐기(정보량 비례 K 예산, 2026-08-22): 고정 "최대 30건"은 시간 비례 설계의
+    # 잔재라 이 라운드가 폐기한다 — 천장은 이제 --k-budget이 계산해 디스패치가
+    # 주입하고, "최대 30건"은 그 값을 못 받았을 때의 폴백 문구로만 남는다.
     def test_knowledge_cap_present(self):
-        assert "최대 30건" in SYNTHESIZE
+        assert "폴백은 천장 30건" in SYNTHESIZE
 
 
 class TestNoAutocorrectContract:
@@ -140,9 +143,13 @@ class TestProportionalBudgetContract:
     def test_zoom_scales_with_duration(self):
         assert "20분 초과" in TRANSCRIBE   # 지도 모드: 긴 영상은 확대 6~8곳
 
+    # 폐기(정보량 비례 K 예산, 2026-08-22): "최대 30건"·"분당" 비례는 시간을 정보량의
+    # 대리 지표로 쓴 설계였다 — 이제 K 천장·하한은 자막 문자수·V라인 수 기반
+    # --k-budget이 산출해 디스패치가 주입한다. 새 계약: SYNTHESIZE가 그 주입값을
+    # 따르라고 명시하는지 검증한다.
     def test_knowledge_cap_scales(self):
-        assert "최대 30건" in SYNTHESIZE   # 기존 계약 유지
-        assert "분당" in SYNTHESIZE        # 비례 조항
+        assert "디스패치가 주는" in SYNTHESIZE
+        assert "K 예산" in SYNTHESIZE
 
 
 class TestZoomLeverContract:
@@ -164,9 +171,12 @@ class TestZoomLeverContract:
 
 class TestKnowledgeFloorContract:
     # 실측(2026-08-19, v0.9.0 run1): "분당 2.5건까지"는 천장일 뿐 — 모델이 40건에서 멈춤.
-    # 긴 영상 밀도는 목표·하한이 있어야 나온다
+    # 긴 영상 밀도는 목표·하한이 있어야 나온다.
+    # 폐기(정보량 비례 K 예산, 2026-08-22): "분당 1.5건 이상을 목표"는 시간 비례
+    # 하한이었다 — 이제 하한은 --k-budget이 계산해 디스패치가 주입하고, 그 하한이
+    # "할당량이 아니라 목표"임을 프롬프트가 명시하는지로 계약을 바꾼다(부풀리기 방어).
     def test_long_video_has_floor_target(self):
-        assert "분당 1.5건 이상을 목표" in SYNTHESIZE
+        assert "하한은 목표이지 할당량이 아니다" in SYNTHESIZE
 
 
 class TestBlindTranscribeContract:
@@ -224,7 +234,16 @@ class TestVisionTypeEnumStrengthenedContract:
 class TestKnowledgeCeilingHarmonized:
     # 천장 조화(density-cure 2차, 2026-08-21): 실측 3회(K 29·30·30)가 전부 "최대
     # 30건" 천장에 붙어 있었다 — 20분 이하 영상에서 K≥40 목표는 계약상 도달 불가
-    # 였다. >20분에만 있던 분당 2.5 비례를 전 영상 max(30, 분당2.5)로 조화한다.
-    def test_ceiling_is_max_of_flat_and_rate(self):
-        assert "최대 30건과 분당 2.5건 중 큰 쪽" in SYNTHESIZE
-        assert "13분 → 33건" in SYNTHESIZE
+    # 였다. >20분에만 있던 분당 2.5 비례를 전 영상 max(30, 분당2.5)로 조화했었다.
+    # 폐기(정보량 비례 K 예산, 2026-08-22): 시간(분당) 비례 자체가 정보량의 대리
+    # 지표라 양방향으로 틀렸다 — 저정보 영상엔 과다, 고정보 영상엔 절단(보존 캐시
+    # 12영상 보정 실측). max(30, 분당2.5) 조화안을 전량 폐기하고 자막 문자수·V라인
+    # 수 기반 --k-budget으로 교체한다. 새 계약: 천장·하한이 디스패치 주입값을
+    # 따른다는 문구와 미주입 시 폴백 문구가 SYNTHESIZE에 남아 있는지 검증한다.
+    def test_ceiling_follows_dispatch_injected_budget(self):
+        assert "디스패치가 주는" in SYNTHESIZE
+        assert "K 예산: 하한" in SYNTHESIZE
+
+    def test_fallback_when_budget_not_given(self):
+        assert "못 받았으면" in SYNTHESIZE
+        assert "폴백은 천장 30건" in SYNTHESIZE

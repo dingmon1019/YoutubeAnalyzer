@@ -125,6 +125,78 @@ def cross_check_values(ev: dict) -> list:
     return out
 
 
+# ── 정보량 비례 K 예산 (info-budget 라운드, 2026-08-22) ─────────────────────
+# 시간(영상 길이)은 정보량의 대리 지표라 양방향으로 틀린다 — 실측(보존 캐시 12영상
+# 보정, docs/superpowers/plans/2026-08-22-info-budget.md): 구 시간 비례 천장
+# max(30, 분당2.5)는 저정보 영상엔 과다(0chZ 4.6분 천장30 vs maxK 15), 고정보
+# 영상엔 절단(7MEs 11.4분 천장30 vs maxK 59)을 낳았다. 합성 시점에 이미 손에 있는
+# 결정론 신호(자막 문자수·화면에 실재하는 V라인 수)로 예산을 계산해 디스패치가
+# 숫자로 주입한다 — synthesize.md는 더 이상 하드코딩된 상한을 갖지 않는다.
+_CJK_RE = re.compile(
+    r"[가-힣ᄀ-ᇿ㄰-㆏一-鿿぀-ヿ]")
+
+
+def _cjk_ratio(text: str) -> float:
+    """전체 문자 대비 한중일 문자 비율. 빈 문자열은 0.0(한국어로 오판하지 않는다)."""
+    if not text:
+        return 0.0
+    return len(_CJK_RE.findall(text)) / len(text)
+
+
+def _transcript_signal(cache_dir) -> tuple:
+    """(문자수, CJK비율) — transcript.json 없음·파손·segments 없음은 (0, 0.0).
+
+    --k-budget은 다른 서브커맨드와 독립적으로 동작해야 한다(플랜 Task 1) — 이
+    입력이 없다고 예외로 죽으면 안 되므로 여기서 조용히 (0, 0.0)으로 폴백한다."""
+    p = Path(cache_dir) / "transcript.json"
+    if not p.exists():
+        return 0, 0.0
+    try:
+        tr = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0, 0.0
+    segs = tr.get("segments") if isinstance(tr, dict) else None
+    text = "".join(s.get("text", "") for s in (segs or []) if isinstance(s, dict))
+    return len(text), _cjk_ratio(text)
+
+
+def _vision_v_count(cache_dir) -> int:
+    """`vision-*.lines`(지도+확대) 전 파일의 `V\t` 시작 줄 수 — 화면에 실재하는
+    값의 양. 읽을 수 없는 파일은 건너뛴다(fail-soft, 크래시 금지)."""
+    total = 0
+    for p in sorted(Path(cache_dir).glob("vision-*.lines")):
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in text.splitlines():
+            if line.split("\t", 1)[0].strip() == "V":
+                total += 1
+    return total
+
+
+def k_budget(cache_dir) -> tuple:
+    """(하한, 천장) — 정보량 비례 K 예산.
+
+    공식(플랜 §설계): 천장 = max(15, round(chars/L + V/4)), 하한 = round(천장*0.5).
+    L(언어 보정) = CJK비율 > 0.2면 150 아니면 350 — 한국어는 문자당 정보밀도가
+    영어의 2배 이상이라는 실측 전제. 보존 캐시 3건으로 회귀 고정(테스트 참고):
+    7MEs(ko) 5363자/94V→(30,59), pwGe(en) 16709자/116V→(38,77),
+    0chZ(en) 4333자/0V→(8,15).
+
+    입력이 전혀 없으면(transcript.json 없음 AND V 0건 — chars==0이 그 대리
+    신호다) 폴백 (8, 15)로 부드럽게 물러난다. 다른 서브커맨드와 독립적으로
+    동작해야 하므로 evidence.json 존재 여부와 무관하다."""
+    chars, cjk_ratio = _transcript_signal(cache_dir)
+    v_count = _vision_v_count(cache_dir)
+    if chars == 0 and v_count == 0:
+        return 8, 15
+    lang_unit = 150 if cjk_ratio > 0.2 else 350
+    ceiling = max(15, round(chars / lang_unit + v_count / 4))
+    floor = round(ceiling * 0.5)
+    return floor, ceiling
+
+
 def evidence_path(cache_dir) -> Path:
     return Path(cache_dir) / "evidence.json"
 
@@ -1157,6 +1229,10 @@ def main() -> int:
     ap.add_argument("--gap-plan", dest="gap_plan", action="store_true",
                     help="공백(G) 확대 지점을 결정론적으로 산출해 zoom.py --timestamps "
                     "스펙(콤마 구분)으로 출력 (보강 단계용, fail-soft)")
+    ap.add_argument("--k-budget", dest="k_budget", action="store_true",
+                    help="transcript.json 문자수(CJK 언어보정)·vision-*.lines의 V "
+                    "개수로 K 예산(하한·천장)을 산출해 stdout에 "
+                    "'KFLOOR n KCEILING m'으로 출력 (fail-soft, 다른 옵션과 독립)")
     ap.add_argument("--cross-flags", dest="cross_flags", type=int, default=0)
     ap.add_argument("--coverage-added", dest="coverage_added", type=int, default=0)
     ap.add_argument("--note", default="",
@@ -1165,19 +1241,28 @@ def main() -> int:
     args = ap.parse_args()
 
     cd = Path(args.cache_dir)
+
+    if args.k_budget:
+        # --k-budget은 evidence.json에 의존하지 않는다(플랜 Task 1: "다른 서브커맨드와
+        # 독립적으로 동작해야 한다") — transcript.json·vision-*.lines만 읽으므로 아래
+        # evidence.json 존재 게이트보다 먼저, 무조건 계산해 출력한다.
+        kfloor, kceiling = k_budget(cd)
+        print(f"KFLOOR {kfloor} KCEILING {kceiling}")
+
     if not evidence_path(cd).exists():
         other_actions = bool(
             args.merge or args.from_lines or args.verdicts or args.add_frames or
             args.validate or args.audit_candidates or args.coverage_input is not None or
             args.digest or args.cross_check or args.render or args.summary)
-        if args.gap_plan and not other_actions:
-            # 보강(gap-plan)은 선택 단계다 — evidence.json이 아직 없다고 파이프라인
-            # 전체를 exit 2로 끊지 않는다(fail-soft). 단, 이 완화는 --gap-plan이
-            # **유일하게 요청된 액션일 때만** 적용한다. 다른 액션(--render 등)과 섞여
-            # 있으면 그 액션들이 통보 없이 스킵된 채 exit 0으로 끝나 파이프라인이 성공으로
-            # 오판하는 조용한 실패가 되므로, 그 경우는 기존 하드게이트(비정상 종료)로
-            # 그대로 흘려보낸다.
-            print(f"NOTE: {evidence_path(cd)} 없음 — gap-plan 생략", file=sys.stderr)
+        if (args.gap_plan or args.k_budget) and not other_actions:
+            # 보강(gap-plan)·K예산(k-budget)은 선택 단계다 — evidence.json이 아직
+            # 없다고 파이프라인 전체를 exit 2로 끊지 않는다(fail-soft). 단, 이 완화는
+            # 이 둘 중 하나가 **유일하게 요청된 액션일 때만** 적용한다. 다른 액션
+            # (--render 등)과 섞여 있으면 그 액션들이 통보 없이 스킵된 채 exit 0으로
+            # 끝나 파이프라인이 성공으로 오판하는 조용한 실패가 되므로, 그 경우는 기존
+            # 하드게이트(비정상 종료)로 그대로 흘려보낸다.
+            if args.gap_plan:
+                print(f"NOTE: {evidence_path(cd)} 없음 — gap-plan 생략", file=sys.stderr)
             return 0
         print(f"ERROR: {evidence_path(cd)} 없음 — analyze.py를 먼저 실행한다", file=sys.stderr)
         return 2

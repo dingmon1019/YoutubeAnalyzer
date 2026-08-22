@@ -55,7 +55,9 @@ NOTE(yt-dlp 최신성·JS 런타임 부재)는 사용자에게 한 줄 알린다
 `<cache_dir>/zoom-out.txt` 경로를 준다. 출력=`<cache_dir>/vision-zoom.lines`.
 최종 응답 `프레임 N, V라인 M`에서 **M < N×2이면 빈약 전사** — 같은 디스패치를 1회만 재시도(지시에 '빈약 전사 감지 — 프레임당 값을 빠짐없이, 요약 금지' 추가). 재시도 후에도 낮으면 그대로 진행하되 8단계 `--note "저밀도 전사 n/장"`으로 보고한다.
 
-**5. 합성 (Agent, `model: "sonnet"`).** "`<PROMPTS>/synthesize.md`를 Read하고 수행.
+**5. 합성 (Agent, `model: "sonnet"`).** 디스패치 전 `evidence.py "<cache_dir>" --k-budget`로
+`KFLOOR n KCEILING m`을 얻는다(정보량 비례 예산, fail-soft — 입력 부재 시 8/15).
+"`<PROMPTS>/synthesize.md`를 Read하고 수행. **K 예산: 하한 <n>건 · 천장 <m>건**.
 입력: pass1-report.txt, vision-map.lines, vision-zoom.lines. 출력:
 <cache_dir>/patch.lines". 인용 V만 복사 + K/C/G — 단일 배치가 계약이다. 최종 응답
 `T=<영상유형>, K n건, C n건, V 복사 m건, ⚠️ k건`에서 9단계 보고용 수치를 얻는다.

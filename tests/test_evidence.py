@@ -1878,3 +1878,104 @@ def test_cli_from_lines_normalized_absent_from_stdout_when_zero(tmp_path):
     assert p.returncode == 0, f"stdout={p.stdout}\nstderr={p.stderr}"
     assert "DROPPED 0" in p.stdout
     assert "NORMALIZED" not in p.stdout
+
+
+# ── 정보량 비례 K 예산 (info-budget 라운드, 2026-08-22) ─────────────────────
+# 시간 비례 천장(구 max(30, 분당2.5))을 폐기하고 자막 문자수(CJK 언어보정)·
+# V라인 수로 계산한다. 회귀 수치는 docs/superpowers/plans/2026-08-22-info-budget.md의
+# 보존 캐시 12영상 보정표에서 그대로 가져온다 — 실제 캐시(pwGeWRlrU10·
+# 7MEsgHKQGLg)의 transcript.json 문자수와 정확히 일치함을 별도 확인했다.
+
+def _make_transcript(cache_dir, chars: int, cjk: bool):
+    unit = "가나다라마바사아자차카타파하" if cjk else "the quick brown fox jumps over lazy dog "
+    text = (unit * (chars // len(unit) + 1))[:chars]
+    tr = {"source": "captions", "lang": "ko" if cjk else "en",
+          "segments": [{"start": 0.0, "text": text}]}
+    (Path(cache_dir) / "transcript.json").write_text(
+        json.dumps(tr, ensure_ascii=False), encoding="utf-8")
+
+
+def _make_vision_lines(cache_dir, n: int, name="vision-map.lines"):
+    lines = "\n".join(f"V\tui\t{i}.0\tf{i}.jpg\thigh\tval{i}" for i in range(n))
+    (Path(cache_dir) / name).write_text(lines, encoding="utf-8")
+
+
+def test_k_budget_ko_dense_regression(tmp_path):
+    """실측 회귀 1(플랜 보정표): 7MEsgHKQGLg(ko) 5363자/94V → 천장 59·하한 30."""
+    _make_transcript(tmp_path, 5363, cjk=True)
+    _make_vision_lines(tmp_path, 94)
+    assert evidence.k_budget(tmp_path) == (30, 59)
+
+
+def test_k_budget_en_dense_regression(tmp_path):
+    """실측 회귀 2: pwGeWRlrU10(en) 16709자/116V → 천장 77·하한 38."""
+    _make_transcript(tmp_path, 16709, cjk=False)
+    _make_vision_lines(tmp_path, 116)
+    assert evidence.k_budget(tmp_path) == (38, 77)
+
+
+def test_k_budget_en_sparse_hits_ceiling_floor(tmp_path):
+    """실측 회귀 3: 0chZFIZLR_0(en) 4333자/0V → 공식값(12.38)이 하한선 15에
+    못 미쳐 천장이 15로 바닥을 친다 · 하한 8."""
+    _make_transcript(tmp_path, 4333, cjk=False)
+    assert evidence.k_budget(tmp_path) == (8, 15)
+
+
+def test_k_budget_falls_back_when_no_input_at_all(tmp_path):
+    """transcript.json도 vision-*.lines도 전혀 없으면(캐시 갓 생성 등) 폭이
+    아니라 부드러운 기본값 (8, 15)로 물러난다 — 플랜 Task 1의 명시 폴백."""
+    assert evidence.k_budget(tmp_path) == (8, 15)
+
+
+def test_k_budget_malformed_transcript_json_falls_back(tmp_path):
+    """transcript.json이 파손돼도(JSON 파싱 불가) 크래시하지 않고 chars=0으로
+    폴백한다 — --k-budget은 다른 서브커맨드와 독립적으로 fail-soft해야 한다."""
+    (tmp_path / "transcript.json").write_text("{not valid json", encoding="utf-8")
+    assert evidence.k_budget(tmp_path) == (8, 15)
+
+
+def test_k_budget_language_correction_raises_ceiling_for_cjk(tmp_path):
+    """같은 문자수·V=0이라도 CJK 비율 > 0.2(L=150)면 L=350(영어)보다 천장이
+    높아야 한다 — 한국어 문자당 정보밀도가 2배 이상이라는 플랜 설계 전제."""
+    ko_dir, en_dir = tmp_path / "ko", tmp_path / "en"
+    ko_dir.mkdir()
+    en_dir.mkdir()
+    _make_transcript(ko_dir, 6000, cjk=True)
+    _make_transcript(en_dir, 6000, cjk=False)
+    _, ko_ceiling = evidence.k_budget(ko_dir)
+    _, en_ceiling = evidence.k_budget(en_dir)
+    assert ko_ceiling > en_ceiling
+
+
+def test_k_budget_floor_is_ceiling_halved_and_rounded(tmp_path):
+    _make_transcript(tmp_path, 16709, cjk=False)
+    _make_vision_lines(tmp_path, 116)
+    floor, ceiling = evidence.k_budget(tmp_path)
+    assert floor == round(ceiling * 0.5)
+
+
+def test_cli_k_budget_prints_kfloor_kceiling(tmp_path):
+    _make_transcript(tmp_path, 16709, cjk=False)
+    _make_vision_lines(tmp_path, 116)
+    p = _run([str(tmp_path), "--k-budget"])
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.strip() == "KFLOOR 38 KCEILING 77"
+
+
+def test_cli_k_budget_alone_is_fail_soft_when_evidence_missing(tmp_path):
+    """--k-budget만 단독 요청되면 evidence.json 부재와 무관하게 성공한다 —
+    "다른 서브커맨드와 독립적으로 동작해야 한다"(플랜 Task 1)의 CLI 단(段)."""
+    p = _run([str(tmp_path), "--k-budget"])
+    assert p.returncode == 0
+    assert "KFLOOR 8 KCEILING 15" in p.stdout
+    assert p.stderr == ""
+
+
+def test_cli_k_budget_with_other_action_still_hits_hard_gate(tmp_path):
+    """다른 액션(--render)과 한 호출에 섞이면 evidence.json 부재 하드게이트는
+    기존과 동일하게 적용된다 — k-budget 결과는 이미 stdout에 나갔어도 전체
+    exit code는 실패(2)를 유지해 조용한 스킵을 만들지 않는다."""
+    p = _run([str(tmp_path), "--k-budget", "--render"])
+    assert "KFLOOR" in p.stdout
+    assert p.returncode == 2
+    assert "ERROR" in p.stderr
