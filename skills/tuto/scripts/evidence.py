@@ -125,6 +125,107 @@ def cross_check_values(ev: dict) -> list:
     return out
 
 
+# ── 정보량 비례 K 예산 (info-budget 라운드, 2026-08-22) ─────────────────────
+# 시간(영상 길이)은 정보량의 대리 지표라 양방향으로 틀린다 — 실측(보존 캐시 12영상
+# 보정, docs/superpowers/plans/2026-08-22-info-budget.md): 구 시간 비례 천장
+# max(30, 분당2.5)는 저정보 영상엔 과다(0chZ 4.6분 천장30 vs maxK 15), 고정보
+# 영상엔 절단(7MEs 11.4분 천장30 vs maxK 59)을 낳았다. 합성 시점에 이미 손에 있는
+# 결정론 신호(자막 문자수·화면에 실재하는 V라인 수)로 예산을 계산해 디스패치가
+# 숫자로 주입한다 — synthesize.md는 더 이상 하드코딩된 상한을 갖지 않는다.
+_CJK_RE = re.compile(
+    r"[가-힣ᄀ-ᇿ㄰-㆏一-鿿぀-ヿ]")
+
+
+def _cjk_ratio(text: str) -> float:
+    """전체 문자 대비 한중일 문자 비율. 빈 문자열은 0.0(한국어로 오판하지 않는다)."""
+    if not text:
+        return 0.0
+    return len(_CJK_RE.findall(text)) / len(text)
+
+
+def _transcript_signal(cache_dir) -> tuple:
+    """(문자수, CJK비율) — transcript.json 없음·파손·segments 없음은 (0, 0.0).
+
+    --k-budget은 다른 서브커맨드와 독립적으로 동작해야 한다(플랜 Task 1) — 이
+    입력이 없다고 예외로 죽으면 안 되므로 여기서 조용히 (0, 0.0)으로 폴백한다."""
+    p = Path(cache_dir) / "transcript.json"
+    if not p.exists():
+        return 0, 0.0
+    try:
+        tr = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0, 0.0
+    segs = tr.get("segments") if isinstance(tr, dict) else None
+    text = "".join(s.get("text", "") for s in (segs or []) if isinstance(s, dict))
+    return len(text), _cjk_ratio(text)
+
+
+def _transcript_start_times(cache_dir):
+    """transcript.json의 segments[].start(초) 리스트 — Task 2: K/C 타임스탬프
+    자리 변이 복구 시 t# refs 유도용(`expand_lines`의 `t_times` 인자로 넘긴다).
+
+    없거나 파손이면 None(fail-soft) — --from-lines의 다른 처리를 막지 않는다.
+    세그먼트 하나라도 형식이 어긋나면(dict가 아니거나 start가 비수치) 인덱스
+    정합성이 깨지므로 부분 리스트 대신 통째로 None을 반환한다(t# 유도는
+    인덱스 위치에 의존하므로, 중간을 건너뛰면 엉뚱한 세그먼트를 가리킨다)."""
+    p = Path(cache_dir) / "transcript.json"
+    if not p.exists():
+        return None
+    try:
+        tr = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    segs = tr.get("segments") if isinstance(tr, dict) else None
+    if not isinstance(segs, list):
+        return None
+    out = []
+    for s in segs:
+        if not isinstance(s, dict):
+            return None
+        try:
+            out.append(float(s.get("start", 0)))
+        except (TypeError, ValueError):
+            return None
+    return out
+
+
+def _vision_v_count(cache_dir) -> int:
+    """`vision-*.lines`(지도+확대) 전 파일의 `V\t` 시작 줄 수 — 화면에 실재하는
+    값의 양. 읽을 수 없는 파일은 건너뛴다(fail-soft, 크래시 금지)."""
+    total = 0
+    for p in sorted(Path(cache_dir).glob("vision-*.lines")):
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in text.splitlines():
+            if line.split("\t", 1)[0].strip() == "V":
+                total += 1
+    return total
+
+
+def k_budget(cache_dir) -> tuple:
+    """(하한, 천장) — 정보량 비례 K 예산.
+
+    공식(플랜 §설계): 천장 = max(15, round(chars/L + V/4)), 하한 = round(천장*0.5).
+    L(언어 보정) = CJK비율 > 0.2면 150 아니면 350 — 한국어는 문자당 정보밀도가
+    영어의 2배 이상이라는 실측 전제. 보존 캐시 3건으로 회귀 고정(테스트 참고):
+    7MEs(ko) 5363자/94V→(30,59), pwGe(en) 16709자/116V→(38,77),
+    0chZ(en) 4333자/0V→(8,15).
+
+    입력이 전혀 없으면(transcript.json 없음 AND V 0건 — chars==0이 그 대리
+    신호다) 폴백 (8, 15)로 부드럽게 물러난다. 다른 서브커맨드와 독립적으로
+    동작해야 하므로 evidence.json 존재 여부와 무관하다."""
+    chars, cjk_ratio = _transcript_signal(cache_dir)
+    v_count = _vision_v_count(cache_dir)
+    if chars == 0 and v_count == 0:
+        return 8, 15
+    lang_unit = 150 if cjk_ratio > 0.2 else 350
+    ceiling = max(15, round(chars / lang_unit + v_count / 4))
+    floor = round(ceiling * 0.5)
+    return floor, ceiling
+
+
 def evidence_path(cache_dir) -> Path:
     return Path(cache_dir) / "evidence.json"
 
@@ -483,7 +584,61 @@ def _parse_refs(spec: str, id_offset: int = 0) -> list:
     return out
 
 
-def expand_lines(text: str, id_offset: int = 0) -> dict:
+# 타임스탬프 자리 변이(Task 2, info-budget 라운드) — refs 필드 패턴. K/C의
+# timestamp 자리가 통째로 빠지면(변이3) 그 자리에 refs가 대신 들어와 있다.
+# 이 정규식으로 "그 자리가 사실 refs다"를 판별한다.
+_REFS_SPEC_RE = re.compile(r"^[vt]\d+(;[vt]\d+)*$")
+
+
+def _prescan_v_timestamps(text: str) -> dict:
+    """V 라인의 로컬 순번(1-기준, `vn`과 동일한 증가 규칙) -> timestamp.
+
+    K/C 복구가 로컬 `v#` 참조를 즉시 풀 수 있도록 본 루프 전에 한 번 훑는다.
+    vn 증가는 본 루프와 완전히 같은 규칙이어야 한다 — kind가 "V"면 그 라인
+    자체의 다른 필드가 망가졌어도 vn은 증가한다(위 `_max_v_id_num` 문서의
+    "V가 드롭돼도 vn은 그대로 증가한다"와 동일 전제). timestamp 자체가
+    비수치면 그 vn은 맵에 남기지 않는다(조회 실패로 자연히 이어진다)."""
+    out = {}
+    vn = 0
+    for raw in text.splitlines():
+        if not raw.strip():
+            continue
+        f = raw.split("\t")
+        if f[0].strip() != "V":
+            continue
+        vn += 1
+        if len(f) > 2:
+            try:
+                out[vn] = float(f[2])
+            except ValueError:
+                pass
+    return out
+
+
+def _derive_ts_from_refs(spec: str, v_timestamps: dict, t_times) -> "float | None":
+    """복구된 K/C의 timestamp를 refs에서 유도한다 — 가짜 값(0.0 등)은 절대 만들지
+    않는다. 유도 불가면 None을 반환해 호출부가 기존대로 드롭하게 한다.
+
+    우선순위: refs 중 **첫 v#**가 같은 배치의 V로 풀리면 그 V의 timestamp.
+    없으면(v# 자체가 없거나 배치 안에서 못 풀면) **refs의 첫 토큰**이 t#일 때
+    자막 세그먼트 시작 시각(t_times[idx])을 쓴다. 둘 다 불가하면 None."""
+    toks = [t.strip() for t in (spec or "").split(";") if t.strip()]
+    first_v = next((t for t in toks if t[:1] == "v" and t[1:].isdigit()), None)
+    if first_v is not None:
+        ts = v_timestamps.get(int(first_v[1:]))
+        if ts is not None:
+            return ts
+    if toks and toks[0][:1] == "t" and toks[0][1:].isdigit() and t_times is not None:
+        idx = int(toks[0][1:])
+        if 0 <= idx < len(t_times):
+            try:
+                return float(t_times[idx])
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def expand_lines(text: str, id_offset: int = 0, t_times=None) -> dict:
     """TAB 구분 라인(T/V/K/C/G)을 evidence patch dict로 확장한다.
 
     **관용 드롭(전량거부 폐지, dense 브랜치 8346d04·8678bbd 이식)**: 사용자 정책
@@ -514,8 +669,24 @@ def expand_lines(text: str, id_offset: int = 0) -> dict:
     (0-기준 4)가 정확히 high|medium|low면 잉여 confidence로 보고 제거한 뒤 5필드로
     처리한다(실측: 합성이 refs와 content 사이에 confidence를 끼워 넣어 content가
     "high"로 오배선됐다). 그 외 필드 수 오류는 여전히 드롭+카운트다. 정규화 건수는
-    `_line_stats["normalized"]`에 담겨 조용히 삼켜지지 않고 CLI stdout에 보고된다."""
+    `_line_stats["normalized"]`에 담겨 조용히 삼켜지지 않고 CLI stdout에 보고된다.
+
+    **타임스탬프 자리 변이 복구(Task 2, info-budget 라운드, 실측 3연속 게이트)**:
+    K/C의 timestamp 자리가 float로 파싱되지 않으면 드롭 전에 복구를 시도한다.
+    (a) 그 자리가 confidence 단어(high|medium|low)면 제거하고 나머지를 규약대로
+    재배열한다(변이2). (b) 필드 수가 하나 모자라고 refs 패턴(`^[vt]\\d+(;[vt]\\d+)*$`)
+    이 timestamp 자리에 있으면 timestamp 누락으로 보고 refs를 그 자리로 인정한다
+    (변이3). 두 경우 모두 복구된 timestamp는 **refs에서 유도**한다(`_derive_ts_from_refs`
+    참고) — 첫 v#가 같은 배치의 V로 풀리면 그 timestamp, 없고 첫 ref가 t#이면
+    `t_times`(자막 세그먼트 시작 시각, 초 단위 리스트)에서, 둘 다 불가하면 기존대로
+    드롭한다. 근거 추적이 정본의 존재 이유이므로 0.0 같은 가짜 값은 절대 넣지 않는다.
+    복구 건수도 `_line_stats["normalized"]`에 포함된다(조용한 변조 금지).
+
+    t_times: 자막 세그먼트 start(초) 리스트. CLI(--from-lines)는 cache_dir의
+    transcript.json에서 읽어 넘긴다 — 없거나 파손이면 None(fail-soft)이고, 이
+    경우 t# refs로부터의 유도만 못 할 뿐 나머지 처리는 그대로 진행한다."""
     patch = {"visual_evidence": [], "claims": [], "knowledge_items": [], "gaps": []}
+    v_timestamps = _prescan_v_timestamps(text)
     vn = 0
     attempted = {"T": 0, "V": 0, "K": 0, "C": 0, "G": 0}
     dropped = {"T": 0, "V": 0, "K": 0, "C": 0, "G": 0}
@@ -548,18 +719,54 @@ def expand_lines(text: str, id_offset: int = 0) -> dict:
                     # 그 필드만 버리고 나머지를 5필드 규약대로 재배열한다.
                     kf = kf[:4] + kf[5:]
                     normalized["K"] += 1
-                if len(kf) != 5:
-                    raise ValueError(f"K 필드 수 {len(kf)} != 5")
-                patch["knowledge_items"].append({
-                    "type": kf[1], "timestamp": float(kf[2]),
-                    "evidence": _parse_refs(kf[3], id_offset), "content": kf[4]})
+                if len(kf) == 5 and kf[2] in CONFIDENCE:
+                    # 변이2: confidence 단어가 timestamp 자리를 차지 — 그 필드를
+                    # 들어내면 변이3과 같은 4필드 모양([K,type,refs,content])이
+                    # 되므로 아래 공통 복구 경로로 넘긴다.
+                    kf = [kf[0], kf[1], kf[3], kf[4]]
+                if len(kf) == 4 and _REFS_SPEC_RE.match(kf[2] or ""):
+                    # 변이3(또는 변이2 흡수 후): timestamp 필드가 통째로 빠져
+                    # refs가 그 자리를 차지한다. 가짜 timestamp를 넣지 않고
+                    # refs에서 유도한다 — 유도 불가면 기존대로 드롭한다.
+                    ts = _derive_ts_from_refs(kf[2], v_timestamps, t_times)
+                    if ts is None:
+                        raise ValueError("K: timestamp 복구 실패 — refs에서 유도할 수 없다")
+                    normalized["K"] += 1
+                    patch["knowledge_items"].append({
+                        "type": kf[1], "timestamp": ts,
+                        "evidence": _parse_refs(kf[2], id_offset), "content": kf[3]})
+                else:
+                    if len(kf) != 5:
+                        raise ValueError(f"K 필드 수 {len(kf)} != 5")
+                    patch["knowledge_items"].append({
+                        "type": kf[1], "timestamp": float(kf[2]),
+                        "evidence": _parse_refs(kf[3], id_offset), "content": kf[4]})
             elif kind == "C":
-                c = {"timestamp": float(f[1]), "evidence": _parse_refs(f[2], id_offset),
-                     "claim": f[3], "verification": {"status": "unaudited"}}
-                if len(f) > 4 and f[4].startswith("conflict="):
-                    a, _, b = f[4][len("conflict="):].partition("=>")
-                    c["conflict"] = {"transcript": a, "screen": b}
-                patch["claims"].append(c)
+                cf = f
+                if len(cf) > 1 and cf[1] in CONFIDENCE:
+                    # 변이2: confidence 단어가 timestamp 자리를 차지 — 들어내면
+                    # 변이3과 같은 모양([C,refs,claim[,conflict=...]])이 된다.
+                    cf = [cf[0]] + cf[2:]
+                if len(cf) >= 3 and _REFS_SPEC_RE.match(cf[1] or ""):
+                    # 변이3(또는 변이2 흡수 후): timestamp 필드가 통째로 빠져
+                    # refs가 그 자리를 차지한다.
+                    ts = _derive_ts_from_refs(cf[1], v_timestamps, t_times)
+                    if ts is None:
+                        raise ValueError("C: timestamp 복구 실패 — refs에서 유도할 수 없다")
+                    normalized["C"] += 1
+                    c = {"timestamp": ts, "evidence": _parse_refs(cf[1], id_offset),
+                         "claim": cf[2], "verification": {"status": "unaudited"}}
+                    if len(cf) > 3 and cf[3].startswith("conflict="):
+                        a, _, b = cf[3][len("conflict="):].partition("=>")
+                        c["conflict"] = {"transcript": a, "screen": b}
+                    patch["claims"].append(c)
+                else:
+                    c = {"timestamp": float(f[1]), "evidence": _parse_refs(f[2], id_offset),
+                         "claim": f[3], "verification": {"status": "unaudited"}}
+                    if len(f) > 4 and f[4].startswith("conflict="):
+                        a, _, b = f[4][len("conflict="):].partition("=>")
+                        c["conflict"] = {"transcript": a, "screen": b}
+                    patch["claims"].append(c)
             elif kind == "G":
                 patch["gaps"].append({"start": float(f[1]), "end": float(f[2]), "reason": f[3]})
         except (IndexError, ValueError):
@@ -1157,6 +1364,10 @@ def main() -> int:
     ap.add_argument("--gap-plan", dest="gap_plan", action="store_true",
                     help="공백(G) 확대 지점을 결정론적으로 산출해 zoom.py --timestamps "
                     "스펙(콤마 구분)으로 출력 (보강 단계용, fail-soft)")
+    ap.add_argument("--k-budget", dest="k_budget", action="store_true",
+                    help="transcript.json 문자수(CJK 언어보정)·vision-*.lines의 V "
+                    "개수로 K 예산(하한·천장)을 산출해 stdout에 "
+                    "'KFLOOR n KCEILING m'으로 출력 (fail-soft, 다른 옵션과 독립)")
     ap.add_argument("--cross-flags", dest="cross_flags", type=int, default=0)
     ap.add_argument("--coverage-added", dest="coverage_added", type=int, default=0)
     ap.add_argument("--note", default="",
@@ -1165,19 +1376,28 @@ def main() -> int:
     args = ap.parse_args()
 
     cd = Path(args.cache_dir)
+
+    if args.k_budget:
+        # --k-budget은 evidence.json에 의존하지 않는다(플랜 Task 1: "다른 서브커맨드와
+        # 독립적으로 동작해야 한다") — transcript.json·vision-*.lines만 읽으므로 아래
+        # evidence.json 존재 게이트보다 먼저, 무조건 계산해 출력한다.
+        kfloor, kceiling = k_budget(cd)
+        print(f"KFLOOR {kfloor} KCEILING {kceiling}")
+
     if not evidence_path(cd).exists():
         other_actions = bool(
             args.merge or args.from_lines or args.verdicts or args.add_frames or
             args.validate or args.audit_candidates or args.coverage_input is not None or
             args.digest or args.cross_check or args.render or args.summary)
-        if args.gap_plan and not other_actions:
-            # 보강(gap-plan)은 선택 단계다 — evidence.json이 아직 없다고 파이프라인
-            # 전체를 exit 2로 끊지 않는다(fail-soft). 단, 이 완화는 --gap-plan이
-            # **유일하게 요청된 액션일 때만** 적용한다. 다른 액션(--render 등)과 섞여
-            # 있으면 그 액션들이 통보 없이 스킵된 채 exit 0으로 끝나 파이프라인이 성공으로
-            # 오판하는 조용한 실패가 되므로, 그 경우는 기존 하드게이트(비정상 종료)로
-            # 그대로 흘려보낸다.
-            print(f"NOTE: {evidence_path(cd)} 없음 — gap-plan 생략", file=sys.stderr)
+        if (args.gap_plan or args.k_budget) and not other_actions:
+            # 보강(gap-plan)·K예산(k-budget)은 선택 단계다 — evidence.json이 아직
+            # 없다고 파이프라인 전체를 exit 2로 끊지 않는다(fail-soft). 단, 이 완화는
+            # 이 둘 중 하나가 **유일하게 요청된 액션일 때만** 적용한다. 다른 액션
+            # (--render 등)과 섞여 있으면 그 액션들이 통보 없이 스킵된 채 exit 0으로
+            # 끝나 파이프라인이 성공으로 오판하는 조용한 실패가 되므로, 그 경우는 기존
+            # 하드게이트(비정상 종료)로 그대로 흘려보낸다.
+            if args.gap_plan:
+                print(f"NOTE: {evidence_path(cd)} 없음 — gap-plan 생략", file=sys.stderr)
             return 0
         print(f"ERROR: {evidence_path(cd)} 없음 — analyze.py를 먼저 실행한다", file=sys.stderr)
         return 2
@@ -1197,7 +1417,8 @@ def main() -> int:
             try:
                 expanded = expand_lines(
                     Path(args.from_lines).read_text(encoding="utf-8"),
-                    id_offset=_max_v_id_num(candidate.get("visual_evidence")))
+                    id_offset=_max_v_id_num(candidate.get("visual_evidence")),
+                    t_times=_transcript_start_times(cd))
             except ValueError as e:
                 print(f"INVALID: {e}", file=sys.stderr)
                 return 2

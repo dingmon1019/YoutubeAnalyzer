@@ -186,6 +186,17 @@ class TestGateFailureRetryContract:
         assert "타이머·폴링·ScheduleWakeup 금지" in TEXT
 
 
+class TestInfoBudgetContract:
+    # 정보량 비례 K 예산(2026-08-22): 시간 비례 천장·하한(max(30, 분당2.5))을
+    # 폐기하고, 합성 디스패치 직전에 자막 문자수·V라인 수 기반 --k-budget 결과를
+    # 프롬프트에 주입한다. 이 배선이 SKILL.md에 실제로 있는지 고정한다.
+    def test_k_budget_called_before_synthesis_dispatch(self):
+        assert "--k-budget" in TEXT
+
+    def test_k_budget_result_injected_into_dispatch(self):
+        assert "K 예산: 하한" in TEXT
+
+
 class TestDensityCureContract:
     # 치유 라운드(density-cure, 2026-08-21) 2차 재정: 승격 실측($3.21)에서 지도·확대
     # **둘 다** haiku 1차가 빈약(9V/9장·7V/4장)이라 sonnet 재시도가 두 번 다 발동 —

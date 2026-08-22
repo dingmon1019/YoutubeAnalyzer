@@ -1878,3 +1878,315 @@ def test_cli_from_lines_normalized_absent_from_stdout_when_zero(tmp_path):
     assert p.returncode == 0, f"stdout={p.stdout}\nstderr={p.stderr}"
     assert "DROPPED 0" in p.stdout
     assert "NORMALIZED" not in p.stdout
+
+
+# ── 정보량 비례 K 예산 (info-budget 라운드, 2026-08-22) ─────────────────────
+# 시간 비례 천장(구 max(30, 분당2.5))을 폐기하고 자막 문자수(CJK 언어보정)·
+# V라인 수로 계산한다. 회귀 수치는 docs/superpowers/plans/2026-08-22-info-budget.md의
+# 보존 캐시 12영상 보정표에서 그대로 가져온다 — 실제 캐시(pwGeWRlrU10·
+# 7MEsgHKQGLg)의 transcript.json 문자수와 정확히 일치함을 별도 확인했다.
+
+def _make_transcript(cache_dir, chars: int, cjk: bool):
+    unit = "가나다라마바사아자차카타파하" if cjk else "the quick brown fox jumps over lazy dog "
+    text = (unit * (chars // len(unit) + 1))[:chars]
+    tr = {"source": "captions", "lang": "ko" if cjk else "en",
+          "segments": [{"start": 0.0, "text": text}]}
+    (Path(cache_dir) / "transcript.json").write_text(
+        json.dumps(tr, ensure_ascii=False), encoding="utf-8")
+
+
+def _make_vision_lines(cache_dir, n: int, name="vision-map.lines"):
+    lines = "\n".join(f"V\tui\t{i}.0\tf{i}.jpg\thigh\tval{i}" for i in range(n))
+    (Path(cache_dir) / name).write_text(lines, encoding="utf-8")
+
+
+def test_k_budget_ko_dense_regression(tmp_path):
+    """실측 회귀 1(플랜 보정표): 7MEsgHKQGLg(ko) 5363자/94V → 천장 59·하한 30."""
+    _make_transcript(tmp_path, 5363, cjk=True)
+    _make_vision_lines(tmp_path, 94)
+    assert evidence.k_budget(tmp_path) == (30, 59)
+
+
+def test_k_budget_en_dense_regression(tmp_path):
+    """실측 회귀 2: pwGeWRlrU10(en) 16709자/116V → 천장 77·하한 38."""
+    _make_transcript(tmp_path, 16709, cjk=False)
+    _make_vision_lines(tmp_path, 116)
+    assert evidence.k_budget(tmp_path) == (38, 77)
+
+
+def test_k_budget_en_sparse_hits_ceiling_floor(tmp_path):
+    """실측 회귀 3: 0chZFIZLR_0(en) 4333자/0V → 공식값(12.38)이 하한선 15에
+    못 미쳐 천장이 15로 바닥을 친다 · 하한 8."""
+    _make_transcript(tmp_path, 4333, cjk=False)
+    assert evidence.k_budget(tmp_path) == (8, 15)
+
+
+def test_k_budget_falls_back_when_no_input_at_all(tmp_path):
+    """transcript.json도 vision-*.lines도 전혀 없으면(캐시 갓 생성 등) 폭이
+    아니라 부드러운 기본값 (8, 15)로 물러난다 — 플랜 Task 1의 명시 폴백."""
+    assert evidence.k_budget(tmp_path) == (8, 15)
+
+
+def test_k_budget_malformed_transcript_json_falls_back(tmp_path):
+    """transcript.json이 파손돼도(JSON 파싱 불가) 크래시하지 않고 chars=0으로
+    폴백한다 — --k-budget은 다른 서브커맨드와 독립적으로 fail-soft해야 한다."""
+    (tmp_path / "transcript.json").write_text("{not valid json", encoding="utf-8")
+    assert evidence.k_budget(tmp_path) == (8, 15)
+
+
+def test_k_budget_language_correction_raises_ceiling_for_cjk(tmp_path):
+    """같은 문자수·V=0이라도 CJK 비율 > 0.2(L=150)면 L=350(영어)보다 천장이
+    높아야 한다 — 한국어 문자당 정보밀도가 2배 이상이라는 플랜 설계 전제."""
+    ko_dir, en_dir = tmp_path / "ko", tmp_path / "en"
+    ko_dir.mkdir()
+    en_dir.mkdir()
+    _make_transcript(ko_dir, 6000, cjk=True)
+    _make_transcript(en_dir, 6000, cjk=False)
+    _, ko_ceiling = evidence.k_budget(ko_dir)
+    _, en_ceiling = evidence.k_budget(en_dir)
+    assert ko_ceiling > en_ceiling
+
+
+def test_k_budget_floor_is_ceiling_halved_and_rounded(tmp_path):
+    _make_transcript(tmp_path, 16709, cjk=False)
+    _make_vision_lines(tmp_path, 116)
+    floor, ceiling = evidence.k_budget(tmp_path)
+    assert floor == round(ceiling * 0.5)
+
+
+def test_cli_k_budget_prints_kfloor_kceiling(tmp_path):
+    _make_transcript(tmp_path, 16709, cjk=False)
+    _make_vision_lines(tmp_path, 116)
+    p = _run([str(tmp_path), "--k-budget"])
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.strip() == "KFLOOR 38 KCEILING 77"
+
+
+def test_cli_k_budget_alone_is_fail_soft_when_evidence_missing(tmp_path):
+    """--k-budget만 단독 요청되면 evidence.json 부재와 무관하게 성공한다 —
+    "다른 서브커맨드와 독립적으로 동작해야 한다"(플랜 Task 1)의 CLI 단(段)."""
+    p = _run([str(tmp_path), "--k-budget"])
+    assert p.returncode == 0
+    assert "KFLOOR 8 KCEILING 15" in p.stdout
+    assert p.stderr == ""
+
+
+def test_cli_k_budget_with_other_action_still_hits_hard_gate(tmp_path):
+    """다른 액션(--render)과 한 호출에 섞이면 evidence.json 부재 하드게이트는
+    기존과 동일하게 적용된다 — k-budget 결과는 이미 stdout에 나갔어도 전체
+    exit code는 실패(2)를 유지해 조용한 스킵을 만들지 않는다."""
+    p = _run([str(tmp_path), "--k-budget", "--render"])
+    assert "KFLOOR" in p.stdout
+    assert p.returncode == 2
+    assert "ERROR" in p.stderr
+
+
+# ── Task 2: 합성 K/C 라인의 타임스탬프 자리 변이 복구 (info-budget 라운드,
+# 2026-08-22) ────────────────────────────────────────────────────────────────
+# 실측 3연속 게이트, 매번 다른 변이·매번 100% 드롭 → INVALID → 왕복:
+#   변이1: K 6필드, confidence가 refs·content 사이에 낌 (이미 흡수됨, 위 Task 1b)
+#   변이2: confidence가 timestamp 자리에 들어옴 (K\ttype\thigh\trefs\tcontent)
+#   변이3: timestamp 필드가 통째로 빠짐 (K\ttype\trefs\tcontent — 4필드)
+# 두 변이 모두 드롭 대신 복구한다. 복구된 timestamp는 refs에서 유도한다(가짜
+# 값 금지) — 첫 v#가 같은 배치 V로 풀리면 그 timestamp, 없고 첫 ref가 t#이면
+# t_times(자막 세그먼트 시작 시각)에서, 둘 다 불가하면 기존대로 드롭한다.
+
+def test_expand_lines_k_variant2_confidence_in_timestamp_slot_recovers_from_v_ref():
+    """변이2: K의 timestamp 자리에 confidence 단어가 들어와도 드롭 대신 v1의
+    timestamp로 복구돼 생존해야 한다."""
+    text = ("V\tui\t50.0\tf1.jpg\thigh\t화면값\n"
+            "K\tsetting\thigh\tv1\tCUDA 설정\n")
+    p = evidence.expand_lines(text)
+    assert len(p["knowledge_items"]) == 1
+    k = p["knowledge_items"][0]
+    assert k["type"] == "setting"
+    assert k["timestamp"] == 50.0
+    assert k["content"] == "CUDA 설정"
+    assert k["evidence"] == [{"source": "frame", "ref": "v1"}]
+    assert p["_line_stats"]["dropped"]["K"] == 0
+    assert p["_line_stats"]["normalized"]["K"] == 1
+
+
+def test_expand_lines_k_variant3_missing_timestamp_recovers_from_v_ref():
+    """변이3: K의 timestamp 필드가 통째로 빠져도(4필드) v1의 timestamp로
+    복구돼 생존해야 한다."""
+    text = ("V\tui\t50.0\tf1.jpg\thigh\t화면값\n"
+            "K\tsetting\tv1\tCUDA 설정\n")
+    p = evidence.expand_lines(text)
+    assert len(p["knowledge_items"]) == 1
+    k = p["knowledge_items"][0]
+    assert k["timestamp"] == 50.0
+    assert k["content"] == "CUDA 설정"
+    assert p["_line_stats"]["dropped"]["K"] == 0
+    assert p["_line_stats"]["normalized"]["K"] == 1
+
+
+def test_expand_lines_c_variant2_confidence_in_timestamp_slot_recovers_from_v_ref():
+    text = ("V\tui\t77.0\tf1.jpg\thigh\t화면값\n"
+            "C\thigh\tv1\t주장내용\n")
+    p = evidence.expand_lines(text)
+    assert len(p["claims"]) == 1
+    c = p["claims"][0]
+    assert c["timestamp"] == 77.0
+    assert c["claim"] == "주장내용"
+    assert c["evidence"] == [{"source": "frame", "ref": "v1"}]
+    assert p["_line_stats"]["dropped"]["C"] == 0
+    assert p["_line_stats"]["normalized"]["C"] == 1
+
+
+def test_expand_lines_c_variant3_missing_timestamp_recovers_from_v_ref():
+    text = ("V\tui\t77.0\tf1.jpg\thigh\t화면값\n"
+            "C\tv1\t주장내용\n")
+    p = evidence.expand_lines(text)
+    assert len(p["claims"]) == 1
+    c = p["claims"][0]
+    assert c["timestamp"] == 77.0
+    assert c["claim"] == "주장내용"
+    assert p["_line_stats"]["dropped"]["C"] == 0
+    assert p["_line_stats"]["normalized"]["C"] == 1
+
+
+def test_expand_lines_c_variant2_preserves_conflict_field_after_recovery():
+    """복구 후에도 꼬리의 conflict= 필드는 그대로 살아야 한다."""
+    text = ("V\tui\t77.0\tf1.jpg\thigh\t화면값\n"
+            "C\thigh\tv1\t주장내용\tconflict=16배=>16.3x\n")
+    p = evidence.expand_lines(text)
+    c = p["claims"][0]
+    assert c["conflict"] == {"transcript": "16배", "screen": "16.3x"}
+
+
+def test_expand_lines_k_variant3_derives_timestamp_from_t_ref_when_t_times_given():
+    """v#가 없고 첫 ref가 t#이면 t_times(자막 세그먼트 시작 시각)에서 유도한다."""
+    text = "K\tconcept\tt2\t개념 설명\n"
+    t_times = [0.0, 5.0, 12.5, 20.0]
+    p = evidence.expand_lines(text, t_times=t_times)
+    assert len(p["knowledge_items"]) == 1
+    k = p["knowledge_items"][0]
+    assert k["timestamp"] == 12.5
+    assert k["evidence"] == [{"source": "transcript", "ref": "2"}]
+    assert p["_line_stats"]["normalized"]["K"] == 1
+    assert p["_line_stats"]["dropped"]["K"] == 0
+
+
+def test_expand_lines_c_variant2_derives_timestamp_from_t_ref_when_t_times_given():
+    text = "C\thigh\tt1\t주장\n"
+    t_times = [0.0, 5.0, 12.5]
+    p = evidence.expand_lines(text, t_times=t_times)
+    c = p["claims"][0]
+    assert c["timestamp"] == 5.0
+    assert p["_line_stats"]["normalized"]["C"] == 1
+
+
+def test_expand_lines_k_variant3_drops_when_no_t_times_and_no_v_ref():
+    """t_times가 없고(None) 참조가 t#뿐이면 유도 불가 — 기존대로 드롭한다.
+    근거 추적이 정본의 존재 이유이므로 0.0 같은 가짜 값은 넣지 않는다."""
+    text = "K\tconcept\tt2\t개념 설명\n"
+    p = evidence.expand_lines(text)
+    assert p["knowledge_items"] == []
+    assert p["_line_stats"]["dropped"]["K"] == 1
+    assert p["_line_stats"]["normalized"]["K"] == 0
+
+
+def test_expand_lines_c_variant3_drops_when_no_t_times_and_no_v_ref():
+    text = "C\tt2\t주장\n"
+    p = evidence.expand_lines(text)
+    assert p["claims"] == []
+    assert p["_line_stats"]["dropped"]["C"] == 1
+    assert p["_line_stats"]["normalized"]["C"] == 0
+
+
+def test_expand_lines_k_variant3_drops_when_v_ref_unresolvable_in_batch():
+    """refs가 v9를 가리키는데 배치 안에 v9가 없으면(같은 배치에 없음) t# 대체도
+    없으므로 드롭한다."""
+    text = "K\tconcept\tv9\t개념 설명\n"
+    p = evidence.expand_lines(text)
+    assert p["knowledge_items"] == []
+    assert p["_line_stats"]["dropped"]["K"] == 1
+
+
+def test_expand_lines_kc_recovery_does_not_regress_existing_lenient_rules():
+    """기존 관용 규칙(V 정규화·K stray-confidence 변이1·필드 부족 드롭)은
+    이번 변경 이후에도 그대로 동작해야 한다 — 회귀 가드."""
+    text = ("V\tdiagram\t1.0\tf1.jpg\thigh\t값1\n"          # V 별칭 정규화 -> chart
+            "K\tsetting\t12.5\tv1\thigh\tCUDA 12.6 필요\n"  # 변이1: 6필드 stray confidence
+            "K\tcommand\t2.0\t\n"                            # content 없음 -> 여전히 드롭
+            "C\t132.0\tv1\t정상 주장\n")                     # 정상 4필드 C
+    p = evidence.expand_lines(text)
+    assert p["_line_stats"]["dropped"] == {"T": 0, "V": 0, "K": 1, "C": 0, "G": 0}
+    assert p["_line_stats"]["normalized"] == {"T": 0, "V": 1, "K": 1, "C": 0, "G": 0}
+    assert len(p["knowledge_items"]) == 1
+    assert p["knowledge_items"][0]["content"] == "CUDA 12.6 필요"
+    assert p["claims"][0]["claim"] == "정상 주장"
+
+
+def test_cli_from_lines_recovers_k_timestamp_from_v_ref_reports_normalized(tmp_path):
+    """CLI 왕복: 변이2 K 라인이 같은 배치의 V로 복구되고 NORMALIZED에 잡힌다."""
+    ev = evidence.register_frames(_skel(), ["f1.jpg"])
+    evidence.save(tmp_path, ev)
+    text = ("V\tui\t50.0\tf1.jpg\thigh\t화면값\n"
+            "K\tsetting\thigh\tv1\tCUDA 설정\n")
+    patch_file = tmp_path / "patch.lines"
+    patch_file.write_text(text, encoding="utf-8")
+
+    p = _run([str(tmp_path), "--from-lines", str(patch_file)])
+    assert p.returncode == 0, f"stdout={p.stdout}\nstderr={p.stderr}"
+    assert "DROPPED 0" in p.stdout
+    assert "NORMALIZED 1" in p.stdout
+
+    merged = evidence.load(tmp_path)
+    assert merged["knowledge_items"][0]["timestamp"] == 50.0
+
+
+def test_cli_from_lines_recovers_k_timestamp_from_transcript_segment_start(tmp_path):
+    """CLI가 cache_dir의 transcript.json에서 segments start를 읽어 t_times로
+    넘겨야 t# 유도가 가능하다."""
+    tr = {"source": "captions", "lang": "en", "dupes_removed": 0, "flags": [],
+          "segments": [{"start": 0.0, "text": "a"}, {"start": 5.0, "text": "b"},
+                       {"start": 12.5, "text": "c"}, {"start": 20.0, "text": "d"}]}
+    ev = evidence.build_skeleton(_info(), _sig(), tr, [], "u")
+    evidence.save(tmp_path, ev)
+    (tmp_path / "transcript.json").write_text(json.dumps(tr), encoding="utf-8")
+
+    patch_file = tmp_path / "patch.lines"
+    patch_file.write_text("K\tconcept\tt2\t개념 설명\n", encoding="utf-8")
+
+    p = _run([str(tmp_path), "--from-lines", str(patch_file)])
+    assert p.returncode == 0, f"stdout={p.stdout}\nstderr={p.stderr}"
+    assert "NORMALIZED 1" in p.stdout
+
+    merged = evidence.load(tmp_path)
+    assert merged["knowledge_items"][0]["timestamp"] == 12.5
+    assert merged["knowledge_items"][0]["evidence"] == [{"source": "transcript", "ref": "2"}]
+
+
+def test_cli_from_lines_missing_transcript_json_falls_back_to_none_without_crash(tmp_path):
+    """transcript.json이 아예 없으면(cache_dir 갓 생성 등) t_times=None으로
+    fail-soft해야 한다 — t# 유도만 못 하고 나머지는 정상 진행."""
+    evidence.save(tmp_path, _skel())
+    lines = [f"K\tcommand\t{float(i)}\tt0\t명령 {i}\n" for i in range(4)]
+    lines.append("K\tconcept\tt0\t개념 설명\n")  # v# 없음 + t_times 없음 -> 드롭
+    patch_file = tmp_path / "patch.lines"
+    patch_file.write_text("".join(lines), encoding="utf-8")
+
+    p = _run([str(tmp_path), "--from-lines", str(patch_file)])
+    assert p.returncode == 0, f"stdout={p.stdout}\nstderr={p.stderr}"
+    assert "Traceback" not in p.stderr
+    assert "DROPPED 1" in p.stdout
+
+    merged = evidence.load(tmp_path)
+    assert len(merged["knowledge_items"]) == 4
+
+
+def test_cli_from_lines_malformed_transcript_json_falls_back_to_none_without_crash(tmp_path):
+    """transcript.json이 파손돼도(JSON 파싱 불가) 크래시 없이 None으로 폴백한다."""
+    evidence.save(tmp_path, _skel())
+    (tmp_path / "transcript.json").write_text("{not valid json", encoding="utf-8")
+    lines = [f"K\tcommand\t{float(i)}\tt0\t명령 {i}\n" for i in range(4)]
+    lines.append("K\tconcept\tt0\t개념 설명\n")
+    patch_file = tmp_path / "patch.lines"
+    patch_file.write_text("".join(lines), encoding="utf-8")
+
+    p = _run([str(tmp_path), "--from-lines", str(patch_file)])
+    assert p.returncode == 0, f"stdout={p.stdout}\nstderr={p.stderr}"
+    assert "Traceback" not in p.stderr
+    assert "DROPPED 1" in p.stdout
